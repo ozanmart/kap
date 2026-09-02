@@ -1,0 +1,121 @@
+{
+  "meta": {
+    "artifact_wheel": "/var/folders/zz/zkd3m3_d17x3z1wg5rzfvjnc0000gn/T/kap-benchmark-qo0lkvml/wheelhouse/kap-0.1.0-py3-none-any.whl",
+    "base_python_executable": "/Users/omerozanmart/Desktop/kap/.venv/bin/python",
+    "dependency_preflight": {
+      "bist_agent": [
+        "requests",
+        "tenacity",
+        "dotenv"
+      ],
+      "kap": [],
+      "kap_tr_sdk": [
+        "requests",
+        "pyppeteer",
+        "pandas"
+      ],
+      "pykap": [
+        "requests",
+        "pandas"
+      ]
+    },
+    "generated_at_utc": "2026-09-02T04:22:05.952679+00:00",
+    "live": true,
+    "live_iterations": 1,
+    "network_policy": "public kap.org.tr only; no MKK endpoints",
+    "offline_loads": [
+      1,
+      10
+    ],
+    "profile": "smoke",
+    "python_executable": "/var/folders/zz/zkd3m3_d17x3z1wg5rzfvjnc0000gn/T/kap-benchmark-qo0lkvml/benchmark-venv/bin/python",
+    "python_version": "3.13.12",
+    "repo_roots": {
+      "bist_agent": "/Users/omerozanmart/Downloads/bist-investment-agent-main",
+      "kap": "/Users/omerozanmart/Desktop/kap",
+      "kap_tr_sdk": "/Users/omerozanmart/Downloads/kap-tr-sdk-main",
+      "pykap": "/Users/omerozanmart/Downloads/pykap-master"
+    },
+    "run_id": "20260902T042205Z"
+  },
+  "results": [
+    {
+      "correct": null,
+      "digest": "35509a0022f49871",
+      "implementation": "direct shared-client HTTP + RSC parser",
+      "item_count": 805,
+      "iterations": 1,
+      "max_ms": 4856.534875,
+      "mean_ms": 4856.534875,
+      "measured_seconds": 4.856536583,
+      "min_ms": 4856.534875,
+      "p50_ms": 4856.534875,
+      "p95_ms": 4856.534875,
+      "p99_ms": 4856.534875,
+      "peak_rss_mb": 79.171875,
+      "python_version": "3.13.12",
+      "repo": "kap",
+      "repo_root": "/Users/omerozanmart/Desktop/kap",
+      "request_metrics": {
+        "attempts": 1,
+        "download_s": 0.89811,
+        "fetch_s": 2.210893,
+        "operation": "registry",
+        "operation_id": "610ce737c6bb4b76",
+        "parse_s": 0.129457,
+        "request_s": 2.210885,
+        "stage": "ok",
+        "total_s": 2.384468,
+        "ttfb_s": 1.31274
+      },
+      "sample": [
+        "A1CAP",
+        "A1YEN",
+        "AAGYO",
+        "ACP",
+        "ACSEL"
+      ],
+      "scenario": "live_registry",
+      "started_at_utc": "2026-09-02T04:21:59.997598+00:00",
+      "status": "ok",
+      "throughput_ops_s": 0.2059080546207429,
+      "warmups": 0
+    },
+    {
+      "iterations": 1,
+      "peak_rss_mb": 32.25,
+      "python_version": "3.13.12",
+      "repo": "pykap",
+      "repo_root": "/Users/omerozanmart/Downloads/pykap-master",
+      "scenario": "live_registry",
+      "skip_reason": "missing dependency: requests",
+      "started_at_utc": "2026-09-02T04:22:05.599453+00:00",
+      "status": "skipped",
+      "warmups": 0
+    },
+    {
+      "iterations": 1,
+      "peak_rss_mb": 27.890625,
+      "python_version": "3.13.12",
+      "repo": "kap_tr_sdk",
+      "repo_root": "/Users/omerozanmart/Downloads/kap-tr-sdk-main",
+      "scenario": "live_registry",
+      "skip_reason": "missing dependency: requests",
+      "started_at_utc": "2026-09-02T04:22:05.689477+00:00",
+      "status": "skipped",
+      "warmups": 0
+    },
+    {
+      "iterations": 1,
+      "peak_rss_mb": 32.125,
+      "python_version": "3.13.12",
+      "repo": "bist_agent",
+      "repo_root": "/Users/omerozanmart/Downloads/bist-investment-agent-main",
+      "scenario": "live_registry",
+      "skip_reason": "missing dependency: tenacity",
+      "started_at_utc": "2026-09-02T04:22:05.756576+00:00",
+      "status": "skipped",
+      "warmups": 0
+    }
+  ]
+}

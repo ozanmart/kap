@@ -1,0 +1,72 @@
+[
+  {
+    "disclosureBasic": {
+      "title": "İhraç Tavanına İlişkin Bildirim",
+      "mkkMemberOid": "8acae2c45835eb6501589126d8f220fc",
+      "companyTitle": "KATILIM VARLIK KİRALAMA A.Ş.",
+      "stockCode": "KATVK",
+      "relatedStocks": null,
+      "disclosureClass": "ODA",
+      "disclosureType": "CA",
+      "disclosureCategory": "STT",
+      "publishDate": "01.09.2026 22:59:37",
+      "disclosureId": "4028328c9f52dc4001a05d2b62865938",
+      "disclosureIndex": 1656995,
+      "summary": "Kira Sertifikası İhracına İlişkin Alınan Yönetim Kurulu Kararı",
+      "attachmentCount": 0,
+      "period": "HZ",
+      "isLate": false,
+      "isBlocked": false
+    },
+    "disclosureDetail": {
+      "oldKap": false,
+      "memberType": "IGS"
+    }
+  },
+  {
+    "disclosureBasic": {
+      "title": "Transfer Görüşmelerinin Sonuçlanması veya Sona Ermesi",
+      "mkkMemberOid": "4028e4a14203278a0142095598f114ba",
+      "companyTitle": "GALATASARAY SPORTİF SINAİ VE TİCARİ YATIRIMLAR A.Ş.",
+      "stockCode": "GSRAY",
+      "disclosureClass": "ODA",
+      "disclosureType": "ODA",
+      "disclosureCategory": "ODA",
+      "publishDate": "01.09.2026 22:30:11",
+      "disclosureId": "4028328d9f52dddd01a05e12c3b508df",
+      "disclosureIndex": 1656994,
+      "summary": "Profesyonel Futbolcu Deniz Daniel Gül Transferi Hakkında",
+      "attachmentCount": 0,
+      "period": "HZ",
+      "isLate": false,
+      "isBlocked": false
+    },
+    "disclosureDetail": {
+      "oldKap": false,
+      "memberType": "IGS"
+    }
+  },
+  {
+    "disclosureBasic": {
+      "title": "Sözleşme Feshi",
+      "mkkMemberOid": "4028e4a141da49e50141e0852f272b80",
+      "companyTitle": "TRABZONSPOR SPORTİF YATIRIM VE FUTBOL İŞLETMECİLİĞİ TİCARET A.Ş.",
+      "stockCode": "TSPOR",
+      "disclosureClass": "ODA",
+      "disclosureType": "ODA",
+      "disclosureCategory": "ODA",
+      "publishDate": "01.09.2026 22:15:10",
+      "disclosureId": "4028328c9f52dc3f01a05e64bb9f6b42",
+      "disclosureIndex": 1656993,
+      "summary": "John David Lundstram İle Olan Sözleşmenin Feshi Hakkında.",
+      "attachmentCount": 0,
+      "period": "HZ",
+      "isLate": false,
+      "isBlocked": false
+    },
+    "disclosureDetail": {
+      "oldKap": false,
+      "memberType": "IGS"
+    }
+  }
+]

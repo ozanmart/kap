@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kap"
+version = "0.1.0"
+description = "Agent-Native Python SDK & Toolkit for KAP (Public Disclosure Platform) and Borsa Istanbul"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "LicenseRef-Proprietary"
+authors = [
+    { name = "Ozan Mart" }
+]
+dependencies = [
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+    "beautifulsoup4>=4.11.0",
+    "lxml>=4.9.0",
+    "diskcache>=5.6.0",
+    "click>=8.0.0",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=0.1.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "build>=1.0.0",
+]
+
+[project.scripts]
+kap = "kap.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kap = ["data/*.json"]
