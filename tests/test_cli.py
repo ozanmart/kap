@@ -6,7 +6,8 @@ from click.testing import CliRunner
 
 from kap.cli import main
 from kap.client import KapClient
-from kap.models.disclosure import DisclosureDetail
+from kap.exceptions import KapNotFoundError
+from kap.models.disclosure import DisclosureDetail, ExpectedDisclosure
 from kap.models.financials import FinancialStatement
 from kap.models.market import Indice
 from kap.scrapers.base import KapConnectionError
@@ -80,3 +81,46 @@ def test_cli_subcommand_help_exits_successfully() -> None:
 
     assert result.exit_code == 0
     assert "Read a disclosure's normalized metadata" in result.output
+
+
+def test_cli_info_unknown_ticker_fails_with_nonzero_exit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        KapClient,
+        "get_company_general_info",
+        lambda self, ticker: (_ for _ in ()).throw(KapNotFoundError(f"No company profile found for '{ticker}'")),
+    )
+
+    result = CliRunner().invoke(main, ["info", "NOTATICKERXYZ"])
+
+    assert result.exit_code != 0
+    assert "KapNotFoundError" in result.output
+
+
+def test_cli_calendar_shows_distinct_subjects(monkeypatch) -> None:
+    items = [
+        ExpectedDisclosure(
+            expected_id="exp-1",
+            stock_code="THYAO",
+            company_title="TÜRK HAVA YOLLARI A.O.",
+            subject="Finansal Rapor",
+            period="9 Aylık",
+            start_date="01.10.2026",
+            end_date="09.11.2026",
+        ),
+        ExpectedDisclosure(
+            expected_id="exp-2",
+            stock_code="THYAO",
+            company_title="TÜRK HAVA YOLLARI A.O.",
+            subject="Faaliyet Raporu (Konsolide)",
+            period="9 Aylık",
+            start_date="01.10.2026",
+            end_date="09.11.2026",
+        ),
+    ]
+    monkeypatch.setattr(KapClient, "get_expected_disclosures", lambda self, days_ahead, ticker_or_oid: items)
+
+    result = CliRunner().invoke(main, ["calendar", "--ticker", "THYAO"])
+
+    assert result.exit_code == 0
+    assert "Finansal Rapor" in result.output
+    assert "Faaliyet Raporu (Konsolide)" in result.output

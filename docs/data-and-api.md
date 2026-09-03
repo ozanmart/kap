@@ -4,6 +4,13 @@ The public Python surface is centered on `KapClient` and `AsyncKapClient`.
 Methods return Pydantic models (or typed lists/dictionaries for compatibility)
 and accept ticker symbols or KAP member OIDs where documented.
 
+Not every method here has a CLI subcommand or an MCP/agent tool. `get_company`,
+`get_companies`, `get_historical_disclosures`, `get_company_disclosures_by_type`,
+`get_disclosure_subjects` and `score_company_events` are intentionally
+Python-API-only: they are lower-level or compatibility-oriented calls that the
+CLI and `KapToolkit` do not need to cover independently. This is a deliberate
+scope decision, not a gap to fill.
+
 ## Company and taxonomy
 
 | Method | Result |
@@ -29,7 +36,7 @@ and accept ticker symbols or KAP member OIDs where documented.
 | `get_disclosure_detail(disclosure_index)` | Full text, normalized `disclosure_type`/`disclosure_class` and attachment metadata. |
 
 Use disclosure indices as source identifiers. A detail response may contain PDF
-or XLS links; downloading or parsing an attachment is separate from reading the
+links; downloading or parsing an attachment is separate from reading the
 announcement body.
 
 ## Financials, calendar and events
@@ -38,8 +45,6 @@ announcement body.
   disclosure and returns a structured summary.
 - `get_financial_statement(disclosure_index)` parses statement sections and
   line items from a selected disclosure.
-- `download_financial_report_xls(...)` is an opt-in experimental path enabled
-  by `KapConfig(enable_xls=True)`.
 - `get_expected_disclosures(days_ahead=180, ticker_or_oid=None)` returns the
   expected reporting/earnings calendar.
 - `extract_events(detail)` and `extract_events_many(details)` classify events

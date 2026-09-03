@@ -542,15 +542,18 @@ class ListingsScraper:
             return list(exact_name)
         prefix_index, token_index = _search_indexes()
         starts = list(prefix_index.get(q, ()))
+        starts_tickers = {c.ticker for c in starts}
         query_tokens = [token.casefold() for token in re.findall(r"[A-Z0-9ÇĞİÖŞÜ]{2,}", q)]
         if query_tokens:
-            token_sets = [set(token_index.get(token, ())) for token in query_tokens]
-            common = set.intersection(*token_sets) if all(token_sets) else set()
-            name_match = [c for c in companies if c in common and c not in starts]
+            # Company is an unhashable Pydantic model, so intersect/membership
+            # checks must key on the ticker rather than the model instance.
+            token_sets = [{c.ticker for c in token_index.get(token, ())} for token in query_tokens]
+            common_tickers = set.intersection(*token_sets) if all(token_sets) else set()
+            name_match = [c for c in companies if c.ticker in common_tickers and c.ticker not in starts_tickers]
         else:
             # Arbitrary substring search is inherently O(n); keep it as a
             # compatibility fallback only for fragments that are not tokens.
-            name_match = [c for c in companies if q.casefold() in c.name.casefold() and c not in starts]
+            name_match = [c for c in companies if q.casefold() in c.name.casefold() and c.ticker not in starts_tickers]
         return starts + name_match
 
     def lookup_member_oid(self, query: str) -> str | None:

@@ -1,25 +1,21 @@
 from __future__ import annotations
 
-import io
-import logging
 import re
-import zipfile
 from collections import Counter
 from decimal import Decimal
-from typing import Any
 from bs4 import BeautifulSoup
 
 from ..config import KapConfig
-from ..constants import ENDPOINT_DISCLOSURE_PAGE, ENDPOINT_FINANCIAL_DOWNLOAD_XLS, STATEMENT_NAME_BY_ROLE
+from ..constants import ENDPOINT_DISCLOSURE_PAGE, STATEMENT_NAME_BY_ROLE
 from ..models.financials import FinancialLineItem, FinancialStatement
-from ..exceptions import KapError
 from ..parsing.html_parser import clean_text, normalize_decimal_value, normalize_numeric_value
 from .base import BaseScraper
 
-logger = logging.getLogger("kap.scrapers.financials")
-
-_ROLE_CLASS_RE = re.compile(r"^tbl_general_role_(\d+)$")
-_TABLE_ROLE_SELECTOR = "table.financial-table[class*='tbl_general_role_'], table[class*='tbl_general_role_']"
+_ROLE_CLASS_RE = re.compile(r"^tbl_[a-z]+_role_(\d+)$")
+_TABLE_ROLE_SELECTOR = (
+    "table.financial-table[class*='tbl_'][class*='_role_'], "
+    "table[class*='tbl_'][class*='_role_']"
+)
 _PERIOD_DATE_RE = re.compile(r"\b(\d{2}[./]\d{2}[./]\d{4})\b")
 
 
@@ -127,119 +123,6 @@ def _presentation_metadata(soup: BeautifulSoup) -> tuple[str | None, int | None]
 
 def _normalize_metadata_label(value: str) -> str:
     return re.sub(r"[^a-z0-9çğıöşü]+", "", value.casefold())
-
-
-def _expanded_row_cells(row_node) -> list[tuple[str, str]]:
-    """Return cell text plus its header label while honoring HTML colspan."""
-    cells: list[tuple[str, str]] = []
-    for cell in row_node.find_all(["th", "td"], recursive=False):
-        text = clean_text(cell.get_text(" ", strip=True))
-        colspan = max(1, int(cell.get("colspan") or 1))
-        cells.extend((text, str(cell.get("class") or "")) for _ in range(colspan))
-    return cells
-
-
-def _table_period_columns(table_node) -> tuple[list[str], list[str | None]]:
-    """Extract unique periods and the period assigned to each expanded column."""
-    rows = table_node.find_all("tr")
-    period_labels: list[str] = []
-    column_periods: list[str | None] = []
-
-    for row in rows[:6]:
-        expanded = _expanded_row_cells(row)
-        if not expanded:
-            continue
-        row_periods = [_normalize_period_label(text) for text, _ in expanded]
-        if not any(row_periods):
-            continue
-        if len(row_periods) > len(column_periods):
-            column_periods.extend([None] * (len(row_periods) - len(column_periods)))
-        current_period: str | None = None
-        for index, period in enumerate(row_periods):
-            if period:
-                current_period = period
-                if period not in period_labels:
-                    period_labels.append(period)
-            if current_period and index < len(column_periods) and column_periods[index] is None:
-                column_periods[index] = current_period
-
-    if not period_labels:
-        all_text = table_node.get_text(" ", strip=True)
-        for match in _PERIOD_DATE_RE.findall(all_text):
-            period = match.replace("/", ".")
-            if period not in period_labels:
-                period_labels.append(period)
-    return period_labels, column_periods
-
-
-def _parse_xls_html(raw_file: bytes, file_name: str) -> dict[str, Any]:
-    """Parse an HTML-based XLS export without dropping any period columns."""
-    decoded = None
-    for encoding in ("utf-8", "cp1254", "iso-8859-9", "latin-1"):
-        try:
-            decoded = raw_file.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    if decoded is None:
-        decoded = raw_file.decode("utf-8", errors="replace")
-
-    soup = BeautifulSoup(decoded, "html.parser")
-    fallback_period = file_name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    all_periods: list[str] = []
-    items: list[dict[str, Any]] = []
-
-    for table_index, table in enumerate(soup.find_all("table")):
-        period_labels, column_periods = _table_period_columns(table)
-        for period in period_labels:
-            if period not in all_periods:
-                all_periods.append(period)
-
-        for row in table.find_all("tr"):
-            cells = _expanded_row_cells(row)
-            if len(cells) < 2:
-                continue
-            key = cells[0][0]
-            if not key or _normalize_period_label(key) or key.casefold() in {
-                "kalem",
-                "açıklama",
-                "description",
-                "current period",
-                "önceki dönem",
-            }:
-                continue
-
-            numeric_cells: list[tuple[int, str, float | int]] = []
-            for cell_index, (text, _) in enumerate(cells[1:], start=1):
-                value = normalize_numeric_value(text)
-                if value is not None:
-                    numeric_cells.append((cell_index, text, value))
-            if not numeric_cells:
-                continue
-
-            for period_index, (cell_index, value_text, value) in enumerate(numeric_cells):
-                period = column_periods[cell_index] if cell_index < len(column_periods) else None
-                if period is None and all_periods:
-                    period = all_periods[min(period_index, len(all_periods) - 1)]
-                period = period or fallback_period
-                items.append(
-                    {
-                        "key": key,
-                        "value": value,
-                        "value_text": value_text,
-                        "period_label": period,
-                        "period_index": all_periods.index(period) if period in all_periods else period_index,
-                        "table_index": table_index,
-                    }
-                )
-
-    if not all_periods:
-        all_periods = [fallback_period]
-    return {
-        "source_file": file_name,
-        "period_labels": all_periods,
-        "items": items,
-    }
 
 
 def parse_financial_statement_html(
@@ -382,49 +265,3 @@ class FinancialsScraper:
             deadline_at=self.base.operation_deadline(),
         )
 
-    def download_financial_report_xls(self, member_oid: str, year: int | str = 2024) -> dict[str, Any]:
-        """Download zipped XLS financial report package from KAP and parse tables into structured dict."""
-        if not self.config.enable_xls:
-            raise KapError("XLS backend is disabled; set KapConfig(enable_xls=True) to enable it")
-        route = ENDPOINT_FINANCIAL_DOWNLOAD_XLS.format(
-            lang=self.config.lang,
-            member_oid=member_oid.strip(),
-            year=str(year),
-        )
-        resp = self.base.request_sync("GET", route)
-        content = resp.content
-        return self._parse_zip_xls_content(content, year=str(year))
-
-    async def adownload_financial_report_xls(self, member_oid: str, year: int | str = 2024) -> dict[str, Any]:
-        """Async download zipped XLS financial report package."""
-        if not self.config.enable_xls:
-            raise KapError("XLS backend is disabled; set KapConfig(enable_xls=True) to enable it")
-        route = ENDPOINT_FINANCIAL_DOWNLOAD_XLS.format(
-            lang=self.config.lang,
-            member_oid=member_oid.strip(),
-            year=str(year),
-        )
-        resp = await self.base.request_async("GET", route)
-        content = resp.content
-        return self._parse_zip_xls_content(content, year=str(year))
-
-    def _parse_zip_xls_content(self, content: bytes, year: str) -> dict[str, Any]:
-        extracted_data: dict[str, Any] = {}
-        try:
-            with zipfile.ZipFile(io.BytesIO(content), "r") as zip_ref:
-                for file_name in zip_ref.namelist():
-                    if file_name.lower().endswith((".xls", ".html", ".htm")):
-                        with zip_ref.open(file_name) as f:
-                            raw_file = f.read()
-                        parsed = _parse_xls_html(raw_file, file_name)
-                        period_name = file_name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-                        key = period_name
-                        suffix = 2
-                        while key in extracted_data:
-                            key = f"{period_name}#{suffix}"
-                            suffix += 1
-                        extracted_data[key] = parsed
-        except Exception as e:
-            logger.warning(f"Failed to extract zipped XLS for year {year}: {e}")
-            raise KapError(f"Could not parse XLS archive for year {year}: {e}")
-        return extracted_data

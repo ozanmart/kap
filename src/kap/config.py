@@ -85,7 +85,6 @@ class KapConfig(BaseModel):
     cache_expiry_company_general: int = Field(default=86400 * 2, ge=0, description="Company profile cache TTL (2 days)")
     cache_expiry_disclosure_detail: int = Field(default=86400 * 30, ge=0, description="Immutable disclosure detail cache TTL (30 days)")
     parser_schema_version: str = Field(default="2", description="Cache namespace version for parser/model changes")
-    enable_xls: bool = Field(default=False, description="Enable experimental zipped XLS financial path")
     stale_if_error: bool = Field(default=True, description="Return the last successful response when refresh fails")
     stale_while_revalidate: bool = Field(default=True, description="Refresh stale responses in a bounded background worker")
     stale_max_age_s: int = Field(default=86400 * 30, ge=0, description="How long an old successful value may be used as stale fallback")

@@ -9,7 +9,8 @@ from kap.async_client import AsyncKapClient
 from kap.client import KapClient
 from kap.config import KapConfig
 from kap.storage.sqlite import KapDatabase
-from kap.models.company import Company
+from kap.exceptions import KapNotFoundError
+from kap.models.company import Company, CompanyGeneralInfo
 from kap.models.disclosure import Disclosure
 from kap.models.disclosure import DisclosureDetail
 from kap.models.financials import FinancialLineItem, FinancialStatement
@@ -147,6 +148,15 @@ def test_client_search():
         assert any(c.ticker == "THYAO" for c in results)
 
 
+def test_client_search_multi_word_name_query_does_not_crash():
+    """A multi-token name query (the documented example) used to raise
+    ``TypeError: unhashable type: 'Company'`` because the token-intersection
+    path built sets of Company model instances instead of tickers."""
+    with KapClient() as client:
+        results = client.search_companies("Hava Yolları")
+        assert any(c.ticker == "THYAO" for c in results)
+
+
 def test_sqlite_storage():
     db = KapDatabase(":memory:")
     comp = Company(
@@ -259,6 +269,37 @@ def test_client_event_extraction_recovers_ticker_for_inline_body(monkeypatch):
     assert all(event.company_key == "THYAO" for event in events)
 
 
+def test_client_get_company_general_info_raises_not_found_for_blank_profile(monkeypatch):
+    """An unknown ticker resolves to a raw identifier that KAP's genel-bilgiler
+    page renders as an empty template (200 OK, no data). This must surface as
+    KapNotFoundError instead of a silently blank profile."""
+    blank = CompanyGeneralInfo(member_oid="NOTATICKERXYZ")
+    with KapClient(KapConfig(enable_cache=False)) as client:
+        monkeypatch.setattr(client.company_general, "get_company_general_info", lambda oid: blank)
+        with pytest.raises(KapNotFoundError):
+            client.get_company_general_info("NOTATICKERXYZ")
+
+
+def test_client_event_extraction_honors_fr_type_from_disclosure_detail_alone():
+    """A caller who only has a DisclosureDetail (e.g. the CLI's `events`
+    command) must still hit the FR guard instead of keyword-matching the raw
+    XBRL dump, which contains boilerplate like "Geri Alınmış Paylar" that
+    otherwise false-positives as a BUYBACK event."""
+    detail = DisclosureDetail(
+        disclosure_index=1643802,
+        disclosure_id="disc-fr",
+        title="Finansal Rapor",
+        content_text="Geri Alınmış Paylar (-) ... Treasury Shares (-) 19 -139 -139",
+        url="https://www.kap.org.tr/tr/Bildirim/1643802",
+        stock_code="KCHOL",
+        disclosure_type="FR",
+    )
+    with KapClient(KapConfig(enable_cache=False)) as client:
+        event = client.extract_events(disclosure_detail=detail)
+
+    assert event.event_type.value == "FINANCIAL_REPORT"
+
+
 def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
     selectors: list[int] = []
     candidates = [
@@ -307,6 +348,66 @@ def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
     assert result.disclosure_index == 901
     assert result.stock_code == "THYAO"
     assert selectors == [2024]
+
+
+def test_async_client_get_financials_fetches_candidates_concurrently(monkeypatch):
+    """When more than one FR disclosure matches the year/period filter (e.g. an
+    original filing plus a correction), the async client fetches every
+    candidate's statement concurrently instead of stopping at the first
+    success, then still returns the highest-index usable one."""
+    candidates = [
+        Disclosure(
+            disclosure_id="a",
+            disclosure_index=902,
+            title="2024 Yıllık Finansal Rapor",
+            disclosure_type="FR",
+        ),
+        Disclosure(
+            disclosure_id="b",
+            disclosure_index=900,
+            title="2024 Yıllık Finansal Rapor (Düzeltme)",
+            disclosure_type="FR",
+        ),
+    ]
+    empty_statement = FinancialStatement(disclosure_index=902, stock_code="THYAO", period_labels=[])
+    good_statement = FinancialStatement(
+        disclosure_index=900,
+        stock_code="THYAO",
+        period_labels=["31.12.2024"],
+        items=[
+            FinancialLineItem(
+                disclosure_index=900,
+                statement_role_code="210015",
+                statement_name="balance_sheet",
+                taxonomy_code="cash",
+                period_label="31.12.2024",
+                value_text="1",
+            )
+        ],
+    )
+    fetched: list[int] = []
+
+    async def fake_resolve(ticker):
+        return "oid"
+
+    async def fake_get_company_disclosures(**kwargs):
+        return candidates
+
+    async def fake_get_financial_statement(disclosure_index, **kwargs):
+        fetched.append(disclosure_index)
+        return empty_statement if disclosure_index == 902 else good_statement
+
+    async def run():
+        async with AsyncKapClient(KapConfig(enable_cache=False)) as client:
+            monkeypatch.setattr(client, "_resolve_member_oid", fake_resolve)
+            monkeypatch.setattr(client.disclosures, "aget_company_disclosures", fake_get_company_disclosures)
+            monkeypatch.setattr(client.financials, "aget_financial_statement", fake_get_financial_statement)
+            return await client.get_financials("THYAO", 2024, "annual")
+
+    result = asyncio.run(run())
+
+    assert result.disclosure_index == 900
+    assert sorted(fetched) == [900, 902]
 
 
 def test_client_get_financials_rejects_responsibility_statement_from_publish_year(monkeypatch):

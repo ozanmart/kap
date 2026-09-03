@@ -14,8 +14,7 @@ For a checkout with tests, packaging tools and MCP support:
 python -m pip install "-e .[dev,mcp]"
 ```
 
-The package has no browser or system-service requirement. The optional XLS
-parser is disabled by default and is enabled with `KapConfig(enable_xls=True)`.
+The package has no browser or system-service requirement.
 
 ## First synchronous request
 
