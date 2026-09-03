@@ -40,6 +40,23 @@
   bookkeeping into single implementations shared by the sync and async
   transports, and dropped the duplicated Next.js RSC payload helpers from the
   listings scraper in favor of `kap.parsing.rsc`.
+- Fixed `normalize_decimal_value` routing through `float` before building a
+  `Decimal`, which lost precision on the large magnitudes that appear in
+  full-unit TRY statements; the value is now parsed straight from the
+  normalized text.
+- Fixed `KapToolkit.get_tool_map` referencing `BaseModel` without importing it,
+  which made `typing.get_type_hints` raise `NameError` for any tool that
+  introspects the toolkit.
+- `kap events` now prints every detected event instead of only the first one.
+- Fixed the async stale-while-revalidate refresh being scheduled as an unowned
+  `asyncio` task, which let it be garbage collected mid-flight.
+- Removed the unused `mcp` install extra: the MCP server implements the
+  protocol's JSON-RPC framing directly and never imported the package.
+- Documented that KAP's public taxonomy exposes a single sector level, so
+  `Sector.sub_sectors` stays empty, and corrected the `kap taxonomy` help text.
+- Corrected the event-scoring comment: `exp(-age/30)` is a 30-day decay
+  constant, not a half-life.
+- Removed `tests/run_all.py`, a hand-rolled runner duplicating pytest.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser

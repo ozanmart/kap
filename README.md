@@ -78,10 +78,10 @@ tools = toolkit.get_openai_tools()
 result = toolkit.execute_tool("kap_search_companies", {"query": "ASELS"})
 ```
 
-Start the stdio MCP server after installing the optional extra:
+Start the stdio MCP server; it speaks JSON-RPC over stdio with no extra
+dependency:
 
 ```bash
-python -m pip install "kap[mcp]"
 kap mcp
 ```
 

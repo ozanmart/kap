@@ -221,7 +221,7 @@ def financials(ticker: str, year: int, period: str, json_out: bool):
 @click.argument("category", type=click.Choice(["indices", "sectors", "markets"], case_sensitive=False))
 @click.option("--json-out", is_flag=True, help="Output JSON")
 def taxonomy(category: str, json_out: bool):
-    """List KAP indices, sectors/subsectors, or trading markets."""
+    """List KAP indices, sectors, or trading markets."""
     with KapClient() as client:
         getters = {
             "indices": client.get_indices,
@@ -249,18 +249,21 @@ def taxonomy(category: str, json_out: bool):
 def events(disclosure_index: int):
     """Analyze a disclosure index for derived corporate events (buyback, dividends, etc.)."""
     with KapClient() as client:
-        event = client.extract_events(disclosure_detail=client.get_disclosure_detail(disclosure_index))
-        click.echo(click.style(f"\n=== Detected Event: {event.event_type.value} ===", bold=True, fg="green"))
-        click.echo(f"Company    : {event.company_key}")
-        click.echo(f"Title      : {event.title}")
-        click.echo(f"Confidence : {event.confidence:.2%}")
-        click.echo(f"Score      : {event.score}")
-        if event.effective_dates:
-            click.echo(f"Dates      : {', '.join(event.effective_dates)}")
-        if event.amounts:
-            click.echo(f"Amounts    : {event.amounts}")
-        if event.evidence:
-            click.echo(f"Evidence   : {', '.join(event.evidence)}")
+        detected = client.extract_events_many(
+            disclosure_detail=client.get_disclosure_detail(disclosure_index)
+        )
+        for event in detected:
+            click.echo(click.style(f"\n=== Detected Event: {event.event_type.value} ===", bold=True, fg="green"))
+            click.echo(f"Company    : {event.company_key}")
+            click.echo(f"Title      : {event.title}")
+            click.echo(f"Confidence : {event.confidence:.2%}")
+            click.echo(f"Score      : {event.score}")
+            if event.effective_dates:
+                click.echo(f"Dates      : {', '.join(event.effective_dates)}")
+            if event.amounts:
+                click.echo(f"Amounts    : {event.amounts}")
+            if event.evidence:
+                click.echo(f"Evidence   : {', '.join(event.evidence)}")
 
 
 @main.command()

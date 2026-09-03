@@ -70,6 +70,7 @@ class CacheManager:
         self.last_metadata: dict[str, Any] = {}
         self._refresh_lock = threading.Lock()
         self._refreshing: set[str] = set()
+        self._async_refreshes: set[asyncio.Task[None]] = set()
         self._closed = False
 
         if self.enabled and use_disk and self.cache_dir and diskcache is not None:
@@ -296,7 +297,12 @@ class CacheManager:
                 except Exception as exc:
                     logger.debug("Async stale cache revalidation failed for %s: %s", key, exc)
 
-            asyncio.create_task(refresh())
+            # A bare create_task is only weakly referenced by the loop, so the
+            # revalidation can be garbage collected mid-flight. Hold it until it
+            # finishes, mirroring the daemon thread the sync path owns.
+            task = asyncio.create_task(refresh())
+            self._async_refreshes.add(task)
+            task.add_done_callback(self._async_refreshes.discard)
             self._mark_stale("stale_cache_served; refresh scheduled")
             return stale
 
