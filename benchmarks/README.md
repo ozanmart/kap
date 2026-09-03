@@ -54,7 +54,9 @@ For repeatable local configuration without command-line overrides, set
 `KAP_BENCHMARK_BIST_AGENT_ROOT`. Reports keep only repository labels, never
 local absolute paths.
 
-Reports are written as timestamped JSON and Markdown plus stable `benchmark-results/latest.json` and `benchmark-results/latest.md` files.
+Reports are written as timestamped JSON and Markdown under the ignored
+`benchmark-results/` directory. They are generated artifacts, not source files;
+keep only intentionally curated summaries in documentation or release notes.
 
 ## Interpretation rules
 

@@ -1,4 +1,4 @@
 include CHANGELOG.md CONTRIBUTING.md SECURITY.md
-include KAP_REPORT.md PROVENANCE_AUDIT.md REPORT.md
+include PROVENANCE_AUDIT.md
 recursive-include docs *.md
 recursive-include src/kap/data *.json

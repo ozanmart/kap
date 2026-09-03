@@ -48,6 +48,9 @@ venv.bak/
 .pytest_cache/
 benchmark-results/benchmark-*.json
 benchmark-results/benchmark-*.md
+benchmark-results/latest.json
+benchmark-results/latest.md
+benchmark-results/COMPARISON.md
 benchmark-results/cli-validation-*.json
 benchmark-results/live-validation-*.json
 benchmark-results/live-four-repo/

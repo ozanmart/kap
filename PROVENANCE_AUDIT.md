@@ -6,7 +6,7 @@ Audit date: 2026-09-03
 
 - The current KAP package metadata and repository `LICENSE` declare MIT, selected by the maintainer on 2026-09-03.
 - The local reference project at `Downloads/bist-investment-agent-main` declares `Proprietary` in its `pyproject.toml`.
-- `KAP_REPORT.md` describes this project as a synthesis of the reference repositories and specifically identifies `bist-investment-agent` as a reference for the SSR parser, financial statement parser, event extractor, and SQLite architecture.
+- The release documentation describes this project as a synthesis of reference repositories and identifies `bist-investment-agent` as a reference for the SSR parser, financial statement parser, event extractor, and SQLite architecture.
 - There is no checked-in provenance manifest, permission record, or file-by-file clean-room rewrite record in this repository.
 
 ## Decision
@@ -24,4 +24,4 @@ This audit does not grant any license, and it is not a substitute for legal revi
 
 ## Scope limitations
 
-This audit inspected the local repository, `KAP_REPORT.md`, and the local reference project's metadata. It did not perform a legal determination or certify that every line is independently authored.
+This audit inspected the local repository documentation and the local reference project's metadata. It did not perform a legal determination or certify that every line is independently authored.

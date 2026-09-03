@@ -125,7 +125,7 @@ python -m pytest -q
 python -m build --no-isolation --wheel --sdist
 ```
 
-CI tests both the source tree and the installed wheel on Python 3.10–3.14. The release gate and benchmark methodology are described in [docs/testing-and-release.md](docs/testing-and-release.md). Historical validation reports are kept in [KAP_REPORT.md](KAP_REPORT.md) and [REPORT.md](REPORT.md).
+CI tests both the source tree and the installed wheel on Python 3.10–3.14. The release gate and benchmark methodology are described in [docs/testing-and-release.md](docs/testing-and-release.md); generated benchmark output is intentionally kept out of version control.
 
 ## Documentation map
 
