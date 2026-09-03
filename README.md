@@ -133,9 +133,9 @@ means best-in-suite on every category simultaneously.
 
 | # | Project | KAP Index | Correctness | Coverage | Speed | Reliability | Memory |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | **kap (this package)** | **958** | 1.00 | 12/12 | 0.79 | 1.00 | 1.00 |
-| 2 | kap-tr-sdk | 620 | 0.50 | 4/12 | 0.83 | 1.00 | 0.63 |
-| 3 | pykap | 488 | 0.50 | 5/12 | 0.11 | 1.00 | 0.56 |
+| 1 | **kap (this package)** | **990** | 1.00 | 12/12 | 0.98 | 1.00 | 0.94 |
+| 2 | kap-tr-sdk | 748 | 1.00 | 5/12 | 0.45 | 1.00 | 0.75 |
+| 3 | pykap | 592 | 0.71 | 7/12 | 0.10 | 1.00 | 0.59 |
 
 <sub>`standard` profile, 132 measurements, loads of 1/5/10/25/50 operations,
 CPython 3.13, offline scenarios only. Reproduce with
@@ -158,11 +158,18 @@ scenario and load. And a scenario only one project can perform is scored as
 coverage, never as an uncontested speed win — otherwise the same advantage
 would be counted twice.
 
-`kap` leads on correctness (37 of 37 verified rows, against 5 of 10 for both
-others) and on coverage: it is the only project that can run all twelve
-scenarios. It does not lead on raw speed — `kap-tr-sdk` scores 0.83 there
-against our 0.79, because it parses the replayed company listing faster than we
-do. Full methodology, the per-row table and the scoring rules live in
+`kap` leads on coverage — it is the only project that runs all twelve
+scenarios — and shares the top correctness score with `kap-tr-sdk`. The gap is
+mostly capability, not speed: `kap-tr-sdk` needs a headless browser for the
+pages this package reads over plain HTTP, and neither of the others ships an
+offline registry, a response cache, or a concurrent HTTP path.
+
+Fairness is a property the suite has to earn, so each repository is measured on
+the input its documented approach actually consumes, and is skipped — never
+marked incorrect — where that input cannot be reproduced identically for
+everyone. Tightening those rules moved `kap-tr-sdk` from 484 to 748.
+
+Full methodology, the per-row table and the scoring rules live in
 [benchmarks/README.md](benchmarks/README.md); the scoring module is unit tested
 in `tests/test_benchmark_scoring.py`.
 

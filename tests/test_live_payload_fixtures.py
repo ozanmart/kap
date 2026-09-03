@@ -36,9 +36,23 @@ def test_captured_live_feed_payload_uses_current_disclosure_basic_schema() -> No
 
     rows = scraper.fetch_main_feed({"memberTypes": ["IGS"], "disclosureTypes": []})
 
-    assert [row.disclosure_index for row in rows] == [1656995, 1656994, 1656993]
-    assert rows[0].stock_code == "KATVK"
-    assert rows[0].disclosure_id == "4028328c9f52dc4001a05d2b62865938"
+    # Derive the expectation from the capture so refreshing the fixture does not
+    # mean re-pinning literals, while still asserting that identity is read from
+    # `disclosureBasic` rather than echoed from the envelope.
+    basics = [item["disclosureBasic"] for item in payload]
+    assert [row.disclosure_index for row in rows] == [item["disclosureIndex"] for item in basics]
+    assert [row.stock_code for row in rows] == [item["stockCode"] for item in basics]
+    assert [row.disclosure_id for row in rows] == [item["disclosureId"] for item in basics]
+    assert rows[0].disclosure_type == basics[0]["disclosureType"]
+
+    # The capture must stay a complete payload: a trimmed one would let a
+    # brittle consumer look correct in the benchmark's normalization scenario.
+    required = {
+        "disclosureId", "disclosureIndex", "publishDate", "companyTitle", "stockCode",
+        "relatedStocks", "title", "disclosureType", "disclosureClass", "disclosureCategory",
+        "summary", "year", "donem", "period", "isLate", "senderType",
+    }
+    assert required.issubset(set(basics[0]))
 
 
 def test_captured_live_detail_fixture_recovers_identity_and_attachment() -> None:

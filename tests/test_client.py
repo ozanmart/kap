@@ -666,3 +666,39 @@ def test_company_profile_values_are_stripped_of_source_markup_whitespace(monkeyp
     assert info.subsidiaries[0].activity_field == "Eğitim"
     # A wrapper value must survive normalization so its own handler can unwrap it.
     assert info.subsidiaries[0].currency == "TRY"
+
+
+def test_warm_cache_hits_do_not_rebuild_every_model(tmp_path):
+    """Storing dictionaries is what lets both clients share a cache, but a warm
+    hit must not pay to reconstruct the whole registry each call: for the 800-row
+    company list that reconstruction costs ~250x the cache read itself."""
+    config = KapConfig(enable_cache=True, cache_dir=tmp_path)
+    rows = [Company(ticker=f"T{index:04d}", name=f"Company {index}") for index in range(50)]
+
+    with KapClient(config) as client:
+        calls: list[int] = []
+
+        class Listings:
+            def get_companies(self, online: bool = False):
+                calls.append(1)
+                return rows
+
+        client._components["listings"] = Listings()
+
+        first = client.get_companies()
+        second = client.get_companies()
+
+        assert len(calls) == 1
+        assert [c.ticker for c in first] == [c.ticker for c in second]
+        # Same model instances reused ...
+        assert first[0] is second[0]
+        # ... but a fresh list, so a caller reordering the result cannot reshape
+        # what the next caller receives.
+        assert first is not second
+        first.reverse()
+        assert client.get_companies()[0].ticker == "T0000"
+
+        # A cleared cache must rebuild rather than serve the stale hydration.
+        client.clear_cache()
+        client._components["listings"] = type("Empty", (), {"get_companies": lambda self, online=False: []})()
+        assert client.get_companies() == []

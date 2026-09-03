@@ -35,6 +35,21 @@ DEFAULT_ROOTS = {
     "kap_tr_sdk": _external_repo("KAP_BENCHMARK_KAP_TR_SDK_ROOT", "kap-tr-sdk-main", "kap-tr-sdk-main"),
 }
 EXPECTED_REPLAY_TICKERS = {"ACSEL", "ADEL", "A1CAP", "ACP"}
+
+#: Replaying a captured *server* response to a parser that consumes a
+#: *browser-rendered* DOM measures the capture, not the parser. KAP renders the
+#: listing client-side: fetched over HTTP the page carries only the RSC payload,
+#: while in a browser it also exposes `#financialTable` (846 rows, verified
+#: against the live page on 2026-09-03). A parser that reads that table is not
+#: wrong for finding nothing in the server bytes - it was handed the wrong
+#: input - so it is skipped here rather than recorded as incorrect. The
+#: dependency still shows up where it belongs: in capability coverage, since
+#: such a parser needs a headless browser at runtime and the others do not.
+BROWSER_RENDERED_DOM_SKIP = (
+    "parser consumes a browser-rendered DOM (`#financialTable`), which a captured "
+    "server response does not contain; replaying it would measure the capture, "
+    "not the parser"
+)
 LIVE_REGISTRY_REFERENCE_TICKERS = {"THYAO", "BIMAS", "GARAN", "ACSEL", "A1CAP", "ACP"}
 LIVE_REGISTRY_MIN_TICKERS = 800
 
@@ -96,14 +111,26 @@ def _live_registry_result(values: list[str]) -> dict[str, Any]:
     return result
 
 
+#: The module each repository documents as its entry point, and the attribute a
+#: caller reaches for first. Touching the attribute matters: this package
+#: resolves its client lazily, so importing alone would not pay a cost the
+#: others pay eagerly, and the comparison would flatter it.
+COLD_IMPORT_TARGETS = {
+    "kap": ("kap", "KapClient"),
+    "pykap": ("pykap", "get_bist_companies"),
+    "kap_tr_sdk": ("kap_sdk.kap_client", "KapClient"),
+}
+
+
 def import_target(repo: str) -> dict[str, Any]:
-    targets = {
-        "kap": "kap",
-        "pykap": "pykap",
-        "kap_tr_sdk": "kap_sdk.kap_client",
+    module_name, attribute = COLD_IMPORT_TARGETS[repo]
+    module = importlib.import_module(module_name)
+    entry_point = getattr(module, attribute)
+    return {
+        "item_count": len(vars(module)),
+        "digest": stable_digest(vars(module)),
+        "correct": callable(entry_point),
     }
-    module = importlib.import_module(targets[repo])
-    return {"item_count": len(vars(module)), "digest": stable_digest(vars(module)), "correct": None}
 
 
 def _package_import(repo: str) -> Operation:
@@ -121,46 +148,74 @@ def _package_import(repo: str) -> Operation:
 
 
 def _client_ready(repo: str) -> Operation:
-    if repo != "kap":
-        raise UnsupportedScenario("client-ready scenario is implemented for kap")
+    if repo == "kap":
+        def invoke() -> dict[str, Any]:
+            kap = importlib.import_module("kap")
+            client = kap.KapClient(config=kap.KapConfig(enable_cache=False))
+            client.close()
+            return {"item_count": 1, "correct": True}
 
-    def invoke() -> dict[str, Any]:
-        kap = importlib.import_module("kap")
-        client = kap.KapClient(config=kap.KapConfig(enable_cache=False))
-        client.close()
-        return {"item_count": 1, "correct": True}
+        return Operation(invoke, implementation="package import + lazy KapClient construction")
 
-    return Operation(invoke, implementation="package import + lazy KapClient construction")
+    if repo == "kap_tr_sdk":
+        def invoke() -> dict[str, Any]:
+            module = importlib.import_module("kap_sdk.kap_client")
+            client = module.KapClient()
+            client.cache.close()
+            return {"item_count": 1, "correct": True}
+
+        return Operation(invoke, implementation="package import + KapClient construction")
+
+    raise UnsupportedScenario("repository exposes module-level functions, not a client object")
 
 
 def _first_offline_lookup(repo: str) -> Operation:
-    if repo != "kap":
-        raise UnsupportedScenario("first offline lookup is implemented for kap")
+    if repo == "kap":
+        def invoke() -> dict[str, Any]:
+            kap = importlib.import_module("kap")
+            client = kap.KapClient(config=kap.KapConfig(enable_cache=False))
+            try:
+                company = client.get_company("THYAO")
+                return _result([company.ticker] if company else [], expected={"THYAO"})
+            finally:
+                client.close()
 
-    def invoke() -> dict[str, Any]:
-        kap = importlib.import_module("kap")
-        client = kap.KapClient(config=kap.KapConfig(enable_cache=False))
-        try:
-            company = client.get_company("THYAO")
-            return _result([company.ticker] if company else [], expected={"THYAO"})
-        finally:
-            client.close()
+        return Operation(invoke, implementation="package import + lazy client + first bundled lookup")
 
-    return Operation(invoke, implementation="package import + lazy client + first bundled lookup")
+    if repo == "pykap":
+        def invoke() -> dict[str, Any]:
+            module = importlib.import_module("pykap.get_general_info")
+            company = module.get_general_info("THYAO", online=False)
+            return _result([company.get("ticker", "")] if company else [], expected={"THYAO"})
+
+        return Operation(invoke, implementation="package import + first bundled lookup")
+
+    raise UnsupportedScenario("repository has no offline lookup; every query needs the network")
 
 
 def _warm_lookup(repo: str) -> Operation:
-    if repo != "kap":
-        raise UnsupportedScenario("warm lookup is implemented for kap")
-    kap = importlib.import_module("kap")
-    client = kap.KapClient(config=kap.KapConfig(enable_cache=False))
-    client.get_company("THYAO")
+    if repo == "kap":
+        kap = importlib.import_module("kap")
+        client = kap.KapClient(config=kap.KapConfig(enable_cache=False))
+        client.get_company("THYAO")
 
-    def invoke() -> dict[str, Any]:
-        company = client.get_company("THYAO")
-        return _result([company.ticker] if company else [], expected={"THYAO"})
+        def invoke() -> dict[str, Any]:
+            company = client.get_company("THYAO")
+            return _result([company.ticker] if company else [], expected={"THYAO"})
 
-    return Operation(invoke, client.close, "repeated bundled lookup after client/index warm-up")
+        return Operation(invoke, client.close, "repeated bundled lookup after client/index warm-up")
+
+    if repo == "pykap":
+        module = importlib.import_module("pykap.get_general_info")
+        module.get_general_info("THYAO", online=False)
+
+        def invoke() -> dict[str, Any]:
+            company = module.get_general_info("THYAO", online=False)
+            return _result([company.get("ticker", "")] if company else [], expected={"THYAO"})
+
+        return Operation(invoke, implementation="repeated bundled lookup after module warm-up")
+
+    raise UnsupportedScenario("repository has no offline lookup; every query needs the network")
 
 
 def _first_live_request(repo: str) -> Operation:
@@ -251,40 +306,7 @@ def _listing_replay(repo: str, fixture_path: Path) -> Operation:
         return Operation(invoke, implementation="requests + BeautifulSoup + regex parser (HTTP replayed)")
 
     if repo == "kap_tr_sdk":
-        module = importlib.import_module("kap_sdk.models.company")
-
-        class Page:
-            async def goto(self, *args: Any, **kwargs: Any) -> None:
-                return None
-
-            async def waitForSelector(self, *args: Any, **kwargs: Any) -> None:
-                return None
-
-            async def content(self) -> str:
-                return html
-
-        class Browser:
-            async def newPage(self) -> Page:
-                return Page()
-
-            async def close(self) -> None:
-                return None
-
-        async def fake_launch(*args: Any, **kwargs: Any) -> Browser:
-            return Browser()
-
-        loop = asyncio.new_event_loop()
-
-        def invoke() -> dict[str, Any]:
-            original = module.launch
-            module.launch = fake_launch
-            try:
-                rows = loop.run_until_complete(module.scrape_companies())
-            finally:
-                module.launch = original
-            return _result([row.code for row in rows], expected=EXPECTED_REPLAY_TICKERS)
-
-        return Operation(invoke, loop.close, "pyppeteer browser parser (browser replayed)")
+        raise UnsupportedScenario(BROWSER_RENDERED_DOM_SKIP)
 
     raise UnsupportedScenario(repo)
 
@@ -293,18 +315,22 @@ PROFILE_MEMBER_OID = "4028e4a140f2ed720140f376bebb01a7"
 PROFILE_SOURCE_URL = f"https://www.kap.org.tr/tr/sirket-bilgileri/genel/{PROFILE_MEMBER_OID}"
 
 
+#: Only the scalar fields every participating profile parser documents. A field
+#: one repository models elsewhere (kap-tr-sdk carries the company title on its
+#: Company object, not on CompanyInfo) would otherwise fail it for a modelling
+#: choice rather than for a parsing failure.
+PROFILE_FIELDS = ("website", "auditor", "sector", "market", "indices")
+
+
 def _profile_field_values(values: dict[str, Any]) -> dict[str, Any]:
     """Compare profile parsers on the scalar fields all of them claim to read."""
-    present = {name for name, value in values.items() if str(value or "").strip()}
+    present = {name for name in PROFILE_FIELDS if str(values.get(name) or "").strip()}
     return {
         "item_count": len(present),
         "digest": stable_digest(f"{name}={values[name]}" for name in sorted(present)),
-        "correct": PROFILE_REQUIRED_FIELDS.issubset(present),
-        "sample": sorted(present)[:5],
+        "correct": present == set(PROFILE_FIELDS),
+        "sample": sorted(present),
     }
-
-
-PROFILE_REQUIRED_FIELDS = {"company_title", "sector", "market"}
 
 
 def _profile_replay(repo: str, fixture_path: Path) -> Operation:
@@ -318,7 +344,6 @@ def _profile_replay(repo: str, fixture_path: Path) -> Operation:
         def invoke() -> dict[str, Any]:
             info = module.parse_company_general_html(html, PROFILE_MEMBER_OID, PROFILE_SOURCE_URL)
             return _profile_field_values({
-                "company_title": info.company_title,
                 "sector": info.sector,
                 "market": info.market,
                 "auditor": info.auditor,
@@ -327,6 +352,9 @@ def _profile_replay(repo: str, fixture_path: Path) -> Operation:
             })
 
         return Operation(invoke, implementation="RSC scalar fields with scoped HTML fallback")
+
+    if repo == "kap_tr_sdk":
+        raise UnsupportedScenario(BROWSER_RENDERED_DOM_SKIP)
 
     raise UnsupportedScenario("repository has no company-profile page parser")
 
@@ -351,7 +379,26 @@ def _feed_normalize(repo: str, fixture_path: Path) -> Operation:
 
         return Operation(invoke, implementation="typed Pydantic Disclosure per row")
 
-    raise UnsupportedScenario("repository has no disclosure-feed normalization step")
+    if repo == "kap_tr_sdk":
+        models = importlib.import_module("kap_sdk.models.disclosure")
+
+        def invoke() -> dict[str, Any]:
+            normalized = [
+                models.Disclosure(
+                    disclosureBasic=models.DisclosureBasic(**row["disclosureBasic"]),
+                    disclosureDetail=models.DisclosureDetail(**row["disclosureDetail"]),
+                )
+                for row in rows
+                if isinstance(row, dict)
+            ]
+            return _result(
+                [str(item.disclosureBasic.disclosureIndex) for item in normalized],
+                expected=expected,
+            )
+
+        return Operation(invoke, implementation="typed dataclass per row")
+
+    raise UnsupportedScenario("repository has no disclosure feed to normalize")
 
 
 def _offline_registry(repo: str) -> Operation:
@@ -394,6 +441,26 @@ def _offline_exact_lookup(repo: str) -> Operation:
     raise UnsupportedScenario("repository has no public offline exact-ticker lookup")
 
 
+def _warm_cache_registry_rows() -> list[dict[str, Any]]:
+    """Build the shared warm-cache fixture in kap-tr-sdk's own row shape.
+
+    Both repositories must hold the same number of companies for the warm-hit
+    comparison to mean anything. The rows come from the bundled snapshot, which
+    is a data file rather than any repository's measured code path.
+    """
+    listings = importlib.import_module("kap.scrapers.listings")
+    return [
+        {
+            "path": company.ticker.lower(),
+            "name": company.name,
+            "code": company.ticker,
+            "city": company.city or "",
+            "independent_audit_firm": company.auditor or "",
+        }
+        for company in listings.get_bundled_companies()
+    ]
+
+
 def _warm_cache_exact_lookup(repo: str) -> Operation:
     if repo == "kap":
         kap = importlib.import_module("kap")
@@ -416,18 +483,16 @@ def _warm_cache_exact_lookup(repo: str) -> Operation:
 
         return Operation(invoke, close, "memory/disk cache hit; underlying registry source disabled")
     if repo != "kap_tr_sdk":
-        raise UnsupportedScenario("repository has no comparable warm-cache exact lookup")
+        raise UnsupportedScenario("repository has no response cache; every lookup reparses its bundled JSON")
     module = importlib.import_module("kap_sdk.kap_client")
     temp_dir = tempfile.TemporaryDirectory(prefix="kap-bench-")
     module._CACHE_DIR = temp_dir.name
     client = module.KapClient()
-    client.cache.set(
-        "companies",
-        [
-            {"path": "thy", "name": "TÜRK HAVA YOLLARI A.O.", "code": "THYAO", "city": "İSTANBUL", "independent_audit_firm": ""},
-            {"path": "bim", "name": "BİM BİRLEŞİK MAĞAZALAR A.Ş.", "code": "BIMAS", "city": "İSTANBUL", "independent_audit_firm": ""},
-        ],
-    )
+    # Seed the full registry, not a two-row stub. Scanning 2 entries against
+    # another repository's 800 is not the same operation, and the difference
+    # would be reported as a speed result rather than as the fixture artifact
+    # it is.
+    client.cache.set("companies", _warm_cache_registry_rows())
     loop = asyncio.new_event_loop()
 
     def invoke() -> dict[str, Any]:
@@ -445,7 +510,10 @@ def _warm_cache_exact_lookup(repo: str) -> Operation:
 def _async_http_soak(repo: str) -> Operation:
     """Exercise the SDK's real async HTTP path against a local TCP server."""
     if repo != "kap":
-        raise UnsupportedScenario("local async HTTP soak is implemented for kap")
+        raise UnsupportedScenario(
+            "no public API issues concurrent HTTP requests: pykap is synchronous, and "
+            "kap-tr-sdk's async methods wrap blocking requests calls"
+        )
 
     kap = importlib.import_module("kap")
     base_module = importlib.import_module("kap.scrapers.base")

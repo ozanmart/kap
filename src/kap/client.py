@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -61,6 +62,61 @@ def _load_all(model_cls: Any, raw: Any) -> list[Any]:
     return [model_cls(**item) if isinstance(item, dict) else item for item in raw]
 
 
+#: How many distinct cache keys keep their hydrated models. Small: this exists
+#: for the handful of hot registry/taxonomy keys, not as a second cache.
+_HYDRATION_SLOTS = 16
+
+
+class _Hydrator:
+    """Reuse the models built from an unchanged cached payload.
+
+    Storing dictionaries is what lets the sync and async clients share a cache,
+    but it also means a warm hit would rebuild every model on every call - about
+    0.8 ms for the 800-row company registry, against 0.003 ms to read the entry.
+
+    The cached payload object is reused as long as the entry is unchanged, so
+    payload identity is the invalidation signal: a refreshed or evicted entry
+    hands back a different object and the models are rebuilt.
+    """
+
+    def __init__(self) -> None:
+        self._slots: OrderedDict[str, tuple[int, Any, Any]] = OrderedDict()
+
+    def _cached(self, key: str, raw: Any) -> Any:
+        entry = self._slots.get(key)
+        if entry is None:
+            return None
+        payload_id, payload, value = entry
+        # Compare identity, and keep the payload referenced so its id cannot be
+        # reused by an unrelated object after garbage collection.
+        if payload_id != id(raw) or payload is not raw:
+            return None
+        self._slots.move_to_end(key)
+        return value
+
+    def _store(self, key: str, raw: Any, value: Any) -> None:
+        self._slots[key] = (id(raw), raw, value)
+        self._slots.move_to_end(key)
+        while len(self._slots) > _HYDRATION_SLOTS:
+            self._slots.popitem(last=False)
+
+    def one(self, key: str, model_cls: Any, raw: Any) -> Any:
+        value = self._cached(key, raw)
+        if value is None:
+            value = _load(model_cls, raw)
+            self._store(key, raw, value)
+        return value
+
+    def many(self, key: str, model_cls: Any, raw: Any) -> list[Any]:
+        value = self._cached(key, raw)
+        if value is None:
+            value = _load_all(model_cls, raw)
+            self._store(key, raw, value)
+        # Hand out a fresh list so a caller sorting or trimming the result
+        # cannot reshape what the next caller receives.
+        return list(value)
+
+
 class KapClient:
     """Synchronous client for KAP (Public Disclosure Platform) and Borsa Istanbul."""
 
@@ -80,6 +136,7 @@ class KapClient:
         )
 
         self._components: dict[str, Any] = {}
+        self._hydrator = _Hydrator()
         self._db_path = db_path
         self._db: Any = None
         self.last_request_metrics: dict[str, Any] = {}
@@ -212,7 +269,7 @@ class KapClient:
             refresh_async=refresh_async,
             enforce_deadline=online,
         )
-        companies = _load_all(Company, raw)
+        companies = self._hydrator.many(key, Company, raw)
         registry_metrics = getattr(self.listings, "last_registry_metrics", {})
         if registry_metrics.get("operation_id") == self.last_request_metrics.get("operation_id"):
             self.last_request_metrics = dict(registry_metrics)
@@ -261,7 +318,7 @@ class KapClient:
             expire=self.config.cache_expiry_company_general,
             force_refresh=force_refresh,
         )
-        info = _load(CompanyGeneralInfo, raw)
+        info = self._hydrator.one(key, CompanyGeneralInfo, raw)
         if not info.company_title:
             raise KapNotFoundError(f"No company profile found for '{ticker_or_oid}'")
         if not info.ticker:
@@ -278,8 +335,9 @@ class KapClient:
         from .models.market import Indice
 
         self._begin_operation("indices")
-        return _load_all(Indice, self._cached_call(
-            self._cache_key("indices", lang=self.config.lang),
+        key = self._cache_key("indices", lang=self.config.lang)
+        return self._hydrator.many(key, Indice, self._cached_call(
+            key,
             lambda: _dump_all(self.listings.get_indices()),
             expire=self.config.cache_expiry_indices,
             force_refresh=force_refresh,
@@ -290,8 +348,9 @@ class KapClient:
         from .models.market import Sector
 
         self._begin_operation("sectors")
-        return _load_all(Sector, self._cached_call(
-            self._cache_key("sectors", lang=self.config.lang),
+        key = self._cache_key("sectors", lang=self.config.lang)
+        return self._hydrator.many(key, Sector, self._cached_call(
+            key,
             lambda: _dump_all(self.listings.get_sectors()),
             expire=self.config.cache_expiry_sectors,
             force_refresh=force_refresh,
@@ -302,8 +361,9 @@ class KapClient:
         from .models.market import Market
 
         self._begin_operation("markets")
-        return _load_all(Market, self._cached_call(
-            self._cache_key("markets", lang=self.config.lang),
+        key = self._cache_key("markets", lang=self.config.lang)
+        return self._hydrator.many(key, Market, self._cached_call(
+            key,
             lambda: _dump_all(self.listings.get_markets()),
             expire=self.config.cache_expiry_markets,
             force_refresh=force_refresh,
