@@ -118,7 +118,14 @@ class GetCompanyDisclosuresInput(ToolInput):
         default="ALL",
         description="Type filter: 'ALL' (all announcements), 'FR' (financial reports), 'ODA' (material event disclosures), 'DUY' (regulatory)",
     )
-    range_days: int = Field(default=365, ge=1, le=3650, description="Date range lookback in days (e.g. 30, 90, 365)")
+    range_days: int = Field(
+        default=365,
+        ge=1,
+        description=(
+            "Lookback window: 1-365 days, or a four-digit calendar year such as 2024. "
+            "KAP serves no other value."
+        ),
+    )
     limit: int = Field(default=30, ge=1, le=100, description="Max disclosures to return")
     page: int = Field(default=1, ge=1)
     page_size: int | None = Field(default=None, ge=1, le=100)

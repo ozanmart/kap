@@ -455,3 +455,22 @@ def test_parser_failure_publishes_the_same_stage_for_both_runners() -> None:
     assert sync_scraper.last_request_metrics["stage"] == "parse_error"
     assert async_metrics["stage"] == "parse_error"
     assert async_metrics["error"] == sync_scraper.last_request_metrics["error"] == "ValueError: bad payload"
+
+
+def test_http2_is_disabled_when_h2_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """httpx raises ImportError from its constructor when http2=True and h2 is
+    absent, which would turn every network call into a hard failure rather than
+    the HTTP/1.1 fallback the dependency is supposed to allow."""
+    from kap.scrapers import base
+
+    base._http2_available.cache_clear()
+    monkeypatch.setattr(base.importlib.util, "find_spec", lambda name: None if name == "h2" else object())
+    try:
+        assert base._http2_available() is False
+        scraper = base.BaseScraper(KapConfig(base_url="https://example.test"))
+        try:
+            assert scraper._get_sync_client() is not None
+        finally:
+            scraper.close()
+    finally:
+        base._http2_available.cache_clear()

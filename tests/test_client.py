@@ -640,3 +640,29 @@ def test_async_client_get_financials_stops_after_the_first_usable_candidate(monk
 
     assert result.disclosure_index == 902
     assert fetched == [902]
+
+
+def test_company_profile_values_are_stripped_of_source_markup_whitespace(monkeypatch):
+    """RSC payload values still carry the markup's newlines, which leaked into
+    model fields (a subsidiary title arrived as 'THY ... A.Ş.\\n')."""
+    import kap.scrapers.company_general as module
+
+    records = [
+        {
+            "item_key": "kpy41_acc7_bagli_ortakliklar",
+            "item_name": "Bağlı Ortaklıklar",
+            "value": [{
+                "companyTitle": "THY Uçuş Eğitim A.Ş.\n",
+                "scopeOfActivitiesOfCompany": "  Eğitim  ",
+                "monetaryUnit": {"key": "TRY"},
+                "ratioOfCapitalShareOfCompany": "100",
+            }],
+        },
+    ]
+    monkeypatch.setattr(module, "iter_rsc_items", lambda html: iter(records))
+    info = parse_company_general_html("<div companyname='X'></div>", "oid", "https://example.test")
+
+    assert info.subsidiaries[0].company_title == "THY Uçuş Eğitim A.Ş."
+    assert info.subsidiaries[0].activity_field == "Eğitim"
+    # A wrapper value must survive normalization so its own handler can unwrap it.
+    assert info.subsidiaries[0].currency == "TRY"

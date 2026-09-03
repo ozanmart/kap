@@ -23,7 +23,14 @@ from .config import KapConfig
 from .constants import SUBJECT_OID_FINANCIAL_REPORT
 from .exceptions import KapDeadlineExceeded, KapNotFoundError, KapValidationError
 from .scrapers.base import BaseScraper
-from ._validation import is_hex_token, normalize_ticker, positive_int, require_text, validate_date_range
+from ._validation import (
+    disclosure_range,
+    is_hex_token,
+    normalize_ticker,
+    positive_int,
+    require_text,
+    validate_date_range,
+)
 
 if TYPE_CHECKING:
     from .models.company import Company, CompanyGeneralInfo
@@ -423,7 +430,7 @@ class AsyncKapClient:
         from .models.disclosure import Disclosure
 
         self._begin_operation("company_disclosures")
-        range_days = positive_int(range_days, "range_days", maximum=3650)
+        range_days = disclosure_range(range_days)
         limit = positive_int(limit, "limit", maximum=200)
         oid = await self._resolve_member_oid(ticker_or_oid)
         key = self._cache_key(

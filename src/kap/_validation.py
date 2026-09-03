@@ -43,6 +43,23 @@ def positive_int(value: Any, field: str, *, maximum: int | None = None) -> int:
     return result
 
 
+def disclosure_range(value: Any, field: str = "range_days") -> int:
+    """Validate KAP's company-feed window: 1-365 days, or a four-digit year.
+
+    KAP answers any other value with an empty list instead of an error, so a
+    366-day request is indistinguishable from a company that filed nothing.
+    Reject it here rather than reporting the empty result as a real answer.
+    """
+    result = positive_int(value, field)
+    current_year = date.today().year
+    if result <= 365 or 2000 <= result <= current_year:
+        return result
+    raise KapValidationError(
+        f"{field} must be 1-365 days or a four-digit year between 2000 and {current_year}; "
+        f"KAP returns no rows for {result}"
+    )
+
+
 def validate_date_range(from_date: date | None, to_date: date | None) -> None:
     """Reject an inverted historical query before it reaches KAP."""
     if from_date is not None and not isinstance(from_date, date):
@@ -53,4 +70,11 @@ def validate_date_range(from_date: date | None, to_date: date | None) -> None:
         raise KapValidationError("from_date cannot be later than to_date")
 
 
-__all__ = ["is_hex_token", "normalize_ticker", "positive_int", "require_text", "validate_date_range"]
+__all__ = [
+    "disclosure_range",
+    "is_hex_token",
+    "normalize_ticker",
+    "positive_int",
+    "require_text",
+    "validate_date_range",
+]

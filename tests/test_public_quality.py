@@ -88,3 +88,22 @@ def test_database_close_is_idempotent() -> None:
     db = KapDatabase(":memory:")
     db.close()
     db.close()
+
+
+def test_company_disclosure_range_rejects_windows_kap_serves_empty() -> None:
+    """KAP's company feed honors 1-365 days or a four-digit year and answers
+    anything else with an empty list, which is indistinguishable from a company
+    that filed nothing."""
+    from datetime import date
+
+    with KapClient(KapConfig(enable_cache=False)) as client:
+        with pytest.raises(KapValidationError, match="1-365 days or a four-digit year"):
+            client.get_company_disclosures("THYAO", range_days=400)
+        with pytest.raises(KapValidationError, match="1-365 days or a four-digit year"):
+            client.get_company_disclosures("THYAO", range_days=1999)
+
+    from kap._validation import disclosure_range
+
+    assert disclosure_range(365) == 365
+    assert disclosure_range(1) == 1
+    assert disclosure_range(date.today().year) == date.today().year

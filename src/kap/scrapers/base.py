@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import email.utils
+import importlib.util
 import logging
 import threading
 import time
 import uuid
+from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Any
 import httpx
@@ -21,6 +23,20 @@ from ..exceptions import (
 )
 
 logger = logging.getLogger("kap.scraper")
+
+
+@lru_cache(maxsize=1)
+def _http2_available() -> bool:
+    """Report whether httpx can negotiate HTTP/2 in this environment.
+
+    ``h2`` is a declared dependency, but httpx raises ImportError from the
+    client constructor when it is missing, which would turn every network call
+    into a hard failure. Degrade to HTTP/1.1 instead.
+    """
+    if importlib.util.find_spec("h2") is not None:
+        return True
+    logger.debug("h2 is not installed; falling back to HTTP/1.1")
+    return False
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -195,7 +211,7 @@ class BaseScraper:
                 timeout=timeout,
                 headers=DEFAULT_HEADERS,
                 follow_redirects=True,
-                http2=True,
+                http2=_http2_available(),
             )
         return self._sync_client
 
@@ -213,7 +229,7 @@ class BaseScraper:
                 timeout=timeout,
                 headers=DEFAULT_HEADERS,
                 follow_redirects=True,
-                http2=True,
+                http2=_http2_available(),
             )
         return self._async_client
 

@@ -126,7 +126,7 @@ def latest(limit: int, ticker: str | None):
 @main.command()
 @click.argument("ticker")
 @click.option("--type", "notification_type", default="ALL", help="ALL, FR, ODA, DUY, DG")
-@click.option("--days", default=365, help="Lookback in days")
+@click.option("--days", default=365, help="Lookback: 1-365 days, or a four-digit year (e.g. 2024)")
 @click.option("--limit", default=20, help="Max items")
 def disclosures(ticker: str, notification_type: str, days: int, limit: int):
     """List historical announcements for a specific company."""
@@ -189,10 +189,11 @@ def calendar(days: int, ticker: str | None):
 
 @main.command()
 @click.argument("disclosure_index", type=int)
-def statement(disclosure_index: int):
+@click.option("--ticker", default=None, help="Attach a ticker; the report page itself does not always carry one")
+def statement(disclosure_index: int, ticker: str | None):
     """Parse and view financial statement tables for an announcement index."""
     with KapClient() as client:
-        stmt = client.get_financial_statement(disclosure_index)
+        stmt = client.get_financial_statement(disclosure_index, ticker=ticker)
         click.echo(f"\nFinancial Statement for #{disclosure_index} ({stmt.stock_code or 'UNKNOWN'}):")
         click.echo(f"Periods: {', '.join(stmt.period_labels)}")
         for stmt_name, count in stmt.statement_counts.items():
@@ -252,12 +253,14 @@ def events(disclosure_index: int):
         detected = client.extract_events_many(
             disclosure_detail=client.get_disclosure_detail(disclosure_index)
         )
+        # score_company_events fills in each event's decayed impact score.
+        client.score_company_events(detected)
         for event in detected:
             click.echo(click.style(f"\n=== Detected Event: {event.event_type.value} ===", bold=True, fg="green"))
             click.echo(f"Company    : {event.company_key}")
             click.echo(f"Title      : {event.title}")
             click.echo(f"Confidence : {event.confidence:.2%}")
-            click.echo(f"Score      : {event.score}")
+            click.echo(f"Score      : {event.score if event.score is not None else '-'}")
             if event.effective_dates:
                 click.echo(f"Dates      : {', '.join(event.effective_dates)}")
             if event.amounts:

@@ -69,6 +69,19 @@
   class.
 - Removed `SUBJECT_OID_ACTIVITY_REPORT`, which was unused and matched no
   subject in any live disclosure class.
+- Fixed every network call raising `ImportError` when `h2` is absent instead of
+  falling back to HTTP/1.1. `h2` is a declared dependency, but httpx raises from
+  the client constructor, so any environment missing it lost the whole SDK.
+- Fixed `get_company_disclosures`/`kap disclosures` silently returning nothing
+  for a `range_days` KAP does not serve. The company feed honors 1-365 days or a
+  four-digit calendar year and answers anything else with an empty list, which
+  looked like a company with no filings; other values now raise
+  `KapValidationError`.
+- Fixed company-profile text keeping the source markup's newlines and
+  non-breaking spaces (a subsidiary title arrived as `THY ... A.Ş.\n`).
+- `kap statement` gained `--ticker`, since a report page does not always carry
+  the stock code and the output otherwise read `UNKNOWN`.
+- `kap events` now prints the decayed impact score instead of `None`.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser
