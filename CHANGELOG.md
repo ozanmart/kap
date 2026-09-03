@@ -33,6 +33,13 @@
   front. It resolves the highest-index filing first, which satisfies nearly
   every lookup, and only falls back to the remaining candidates - concurrently -
   when that one is unusable.
+- Fixed `run_with_deadline_async` never publishing a `parse_error` stage when a
+  parser raised, so a failed async parse was indistinguishable from a running
+  one in `last_request_metrics`.
+- Moved the HTTP retry/deadline/metrics policy and the parser-deadline
+  bookkeeping into single implementations shared by the sync and async
+  transports, and dropped the duplicated Next.js RSC payload helpers from the
+  listings scraper in favor of `kap.parsing.rsc`.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser

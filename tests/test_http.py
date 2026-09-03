@@ -428,3 +428,30 @@ def test_calendar_accepts_current_kap_title_only_rows_and_sorts_real_dates() -> 
 
     assert [row.company_title for row in rows] == ["BAŞKA ŞİRKET A.Ş.", "TÜRK HAVA YOLLARI A.O."]
     assert rows[1].stock_code == "THYAO"
+
+
+def test_parser_failure_publishes_the_same_stage_for_both_runners() -> None:
+    """The async parser runner used to let a parser exception propagate without
+    ever publishing a stage, so a failed async parse looked like a still-running
+    one in request metrics."""
+
+    def boom() -> None:
+        raise ValueError("bad payload")
+
+    sync_scraper = BaseScraper(KapConfig())
+    sync_scraper.begin_operation("parse_probe")
+    with pytest.raises(ValueError):
+        sync_scraper.run_with_deadline_sync(boom, deadline_at=time.monotonic() + 5)
+
+    async def run() -> dict[str, object]:
+        scraper = BaseScraper(KapConfig())
+        scraper.begin_operation("parse_probe")
+        with pytest.raises(ValueError):
+            await scraper.run_with_deadline_async(boom, deadline_at=time.monotonic() + 5)
+        return scraper.last_request_metrics
+
+    async_metrics = asyncio.run(run())
+
+    assert sync_scraper.last_request_metrics["stage"] == "parse_error"
+    assert async_metrics["stage"] == "parse_error"
+    assert async_metrics["error"] == sync_scraper.last_request_metrics["error"] == "ValueError: bad payload"

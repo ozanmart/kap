@@ -120,23 +120,8 @@ class BaseScraper:
         """Run a parser in a daemon thread so an overlong parse cannot block the caller."""
         if deadline_at is None:
             return func()
-        publish = getattr(self, "_publish_metrics", None)
-
-        def publish_metrics(value: dict[str, Any]) -> None:
-            if callable(publish):
-                publish(value)
-            else:
-                setattr(self, "last_request_metrics", dict(value))
-
-        parse_started = time.perf_counter()
-        metrics = dict(getattr(self, "last_request_metrics", {}))
-        metrics["stage"] = "parse"
-        publish_metrics(metrics)
-        remaining = deadline_at - time.monotonic()
-        if remaining <= 0:
-            metrics.update(stage="deadline", error="operation deadline exceeded before parsing")
-            publish_metrics(metrics)
-            raise KapDeadlineExceeded("Operation deadline exceeded before parsing")
+        cycle = _ParseCycle(self, deadline_at)
+        remaining = cycle.remaining()
         result: dict[str, Any] = {}
 
         def worker() -> None:
@@ -149,48 +134,17 @@ class BaseScraper:
         thread.start()
         thread.join(remaining)
         if thread.is_alive():
-            metrics.update(
-                stage="deadline",
-                parse_s=round(time.perf_counter() - parse_started, 6),
-                error="operation deadline exceeded during parsing",
-            )
-            metrics["total_s"] = round(float(metrics.get("fetch_s", 0)) + float(metrics["parse_s"]), 6)
-            publish_metrics(metrics)
-            raise KapDeadlineExceeded("Operation deadline exceeded after parsing started")
+            raise cycle.timed_out()
         if "error" in result:
-            metrics.update(
-                stage="parse_error",
-                parse_s=round(time.perf_counter() - parse_started, 6),
-                error=f"{type(result['error']).__name__}: {result['error']}",
-            )
-            publish_metrics(metrics)
-            raise result["error"]
-        metrics.update(stage="ok", parse_s=round(time.perf_counter() - parse_started, 6))
-        metrics["total_s"] = round(float(metrics.get("fetch_s", 0)) + float(metrics["parse_s"]), 6)
-        publish_metrics(metrics)
-        return result.get("value")
+            raise cycle.failed(result["error"])
+        return cycle.succeeded(result.get("value"))
 
     async def run_with_deadline_async(self, func: Any, *, deadline_at: float | None) -> Any:
         """Run a synchronous parser with a hard caller-visible deadline."""
         if deadline_at is None:
             return func()
-        publish = getattr(self, "_publish_metrics", None)
-
-        def publish_metrics(value: dict[str, Any]) -> None:
-            if callable(publish):
-                publish(value)
-            else:
-                setattr(self, "last_request_metrics", dict(value))
-
-        parse_started = time.perf_counter()
-        metrics = dict(getattr(self, "last_request_metrics", {}))
-        metrics["stage"] = "parse"
-        publish_metrics(metrics)
-        remaining = deadline_at - time.monotonic()
-        if remaining <= 0:
-            metrics.update(stage="deadline", error="operation deadline exceeded before parsing")
-            publish_metrics(metrics)
-            raise KapDeadlineExceeded("Operation deadline exceeded before parsing")
+        cycle = _ParseCycle(self, deadline_at)
+        remaining = cycle.remaining()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
 
@@ -221,19 +175,11 @@ class BaseScraper:
         threading.Thread(target=worker, name="kap-parse-deadline", daemon=True).start()
         try:
             value = await asyncio.wait_for(future, timeout=remaining)
-            metrics.update(stage="ok", parse_s=round(time.perf_counter() - parse_started, 6))
-            metrics["total_s"] = round(float(metrics.get("fetch_s", 0)) + float(metrics["parse_s"]), 6)
-            publish_metrics(metrics)
-            return value
         except asyncio.TimeoutError as exc:
-            metrics.update(
-                stage="deadline",
-                parse_s=round(time.perf_counter() - parse_started, 6),
-                error="operation deadline exceeded during parsing",
-            )
-            metrics["total_s"] = round(float(metrics.get("fetch_s", 0)) + float(metrics["parse_s"]), 6)
-            publish_metrics(metrics)
-            raise KapDeadlineExceeded("Operation deadline exceeded after parsing started") from exc
+            raise cycle.timed_out() from exc
+        except Exception as exc:
+            raise cycle.failed(exc)
+        return cycle.succeeded(value)
 
     def _get_sync_client(self) -> httpx.Client:
         if self._sync_client is None or self._sync_client.is_closed:
@@ -326,22 +272,11 @@ class BaseScraper:
         timing: dict[str, Any] | None = None,
     ) -> httpx.Response:
         client = self._get_sync_client()
-        max_attempts = self._max_attempts()
-        deadline = deadline_at or self.operation_deadline()
-        operation_started = time.perf_counter()
-        metrics = self._timing_context(timing, self.last_request_metrics)
-        metrics["stage"] = "request"
-        for attempt in range(1, max_attempts + 1):
-            metrics["attempts"] = attempt
-            request_started: float | None = None
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                metrics.update(stage="deadline", error="request deadline exceeded")
-                self._finish_http_metrics(metrics, operation_started=operation_started)
-                self._publish_metrics(metrics)
-                raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
+        cycle = _RequestCycle(self, path_or_url, timing, deadline_at)
+        for attempt in range(1, cycle.max_attempts + 1):
+            remaining = cycle.begin_attempt(attempt)
             try:
-                request_started = time.perf_counter()
+                cycle.start_request()
                 if timing is None:
                     resp = client.request(
                         method=method,
@@ -360,92 +295,20 @@ class BaseScraper:
                         headers=headers,
                         timeout=self._timeout_for_remaining(remaining),
                     ) as streamed:
-                        metrics["ttfb_s"] = round(time.perf_counter() - request_started, 6)
-                        if streamed.is_error:
-                            resp = streamed
-                        else:
+                        cycle.record_ttfb()
+                        if not streamed.is_error:
                             streamed.read()
-                            metrics["download_s"] = round(time.perf_counter() - request_started - float(metrics["ttfb_s"]), 6)
-                            resp = streamed
-                metrics["request_s"] = round(time.perf_counter() - request_started, 6)
-                metrics["fetch_s"] = round(time.perf_counter() - operation_started, 6)
+                            cycle.record_download()
+                        resp = streamed
+                cycle.record_sent()
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                if attempt >= max_attempts:
-                    metrics.update(stage="error", error=f"{type(exc).__name__}: {exc}")
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    raise KapConnectionError(
-                        f"Request failed after {attempt} attempts for {path_or_url}: {exc}"
-                    ) from exc
-                delay = self._retry_delay(None, attempt)
-                logger.warning("Transient HTTP error (%s) for %s; retrying in %.2fs", exc, path_or_url, delay)
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    metrics.update(stage="deadline", error="request deadline exceeded")
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}") from exc
-                time.sleep(min(delay, remaining))
+                time.sleep(cycle.on_transport_error(exc, attempt))
                 continue
 
             if resp.is_error:
-                if not self._retryable_status(resp.status_code) or attempt >= max_attempts:
-                    metrics.update(
-                        stage="http_error",
-                        status_code=resp.status_code,
-                        error=f"HTTP error {resp.status_code} for {path_or_url}",
-                    )
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    self._raise_http_error(resp, path_or_url)
-                delay = self._retry_delay(resp, attempt)
-                logger.warning(
-                    "Retryable HTTP status %s for %s; retrying in %.2fs",
-                    resp.status_code,
-                    path_or_url,
-                    delay,
-                )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    metrics.update(stage="deadline", error="request deadline exceeded")
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
-                time.sleep(min(delay, remaining))
+                time.sleep(cycle.on_error_response(resp, attempt))
                 continue
-            if time.monotonic() >= deadline:
-                metrics.update(stage="deadline", error="request deadline exceeded")
-                self._finish_http_metrics(
-                    metrics,
-                    operation_started=operation_started,
-                    request_started=request_started,
-                )
-                self._publish_metrics(metrics)
-                raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
-            metrics["stage"] = "http_success"
-            self._finish_http_metrics(
-                metrics,
-                operation_started=operation_started,
-                request_started=request_started,
-            )
-            self._publish_metrics(metrics)
-            return resp
+            return cycle.finish(resp)
 
         raise KapConnectionError(f"Request failed for {path_or_url}")
 
@@ -463,38 +326,17 @@ class BaseScraper:
         client = self._get_async_client()
         if self._async_semaphore is None:
             self._async_semaphore = asyncio.Semaphore(self.config.max_concurrency)
-        max_attempts = self._max_attempts()
-        deadline = deadline_at or self.operation_deadline()
-        operation_started = time.perf_counter()
-        metrics = self._timing_context(timing, self.last_request_metrics)
-        metrics["stage"] = "request"
-        for attempt in range(1, max_attempts + 1):
-            metrics["attempts"] = attempt
-            request_started: float | None = None
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                metrics.update(stage="deadline", error="request deadline exceeded")
-                self._finish_http_metrics(metrics, operation_started=operation_started)
-                self._publish_metrics(metrics)
-                raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
+        cycle = _RequestCycle(self, path_or_url, timing, deadline_at, label="async ")
+        for attempt in range(1, cycle.max_attempts + 1):
+            remaining = cycle.begin_attempt(attempt)
             try:
                 try:
                     await asyncio.wait_for(self._async_semaphore.acquire(), timeout=remaining)
                 except asyncio.TimeoutError as exc:
-                    metrics.update(stage="deadline", error="request deadline exceeded waiting for concurrency slot")
-                    self._finish_http_metrics(metrics, operation_started=operation_started)
-                    self._publish_metrics(metrics)
-                    raise KapDeadlineExceeded(
-                        f"Request deadline exceeded waiting for concurrency slot: {path_or_url}"
-                    ) from exc
+                    raise cycle.slot_deadline() from exc
                 try:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        metrics.update(stage="deadline", error="request deadline exceeded before HTTP request")
-                        self._finish_http_metrics(metrics, operation_started=operation_started)
-                        self._publish_metrics(metrics)
-                        raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
-                    request_started = time.perf_counter()
+                    remaining = cycle.check_budget_before_request()
+                    cycle.start_request()
                     if timing is None:
                         resp = await client.request(
                             method=method,
@@ -513,93 +355,244 @@ class BaseScraper:
                             headers=headers,
                             timeout=self._timeout_for_remaining(remaining),
                         ) as streamed:
-                            metrics["ttfb_s"] = round(time.perf_counter() - request_started, 6)
-                            if streamed.is_error:
-                                resp = streamed
-                            else:
+                            cycle.record_ttfb()
+                            if not streamed.is_error:
                                 await streamed.aread()
-                                metrics["download_s"] = round(time.perf_counter() - request_started - float(metrics["ttfb_s"]), 6)
-                                resp = streamed
-                    metrics["request_s"] = round(time.perf_counter() - request_started, 6)
-                    metrics["fetch_s"] = round(time.perf_counter() - operation_started, 6)
+                                cycle.record_download()
+                            resp = streamed
+                    cycle.record_sent()
                 finally:
                     self._async_semaphore.release()
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                if attempt >= max_attempts:
-                    metrics.update(stage="error", error=f"{type(exc).__name__}: {exc}")
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    raise KapConnectionError(
-                        f"Request failed after {attempt} attempts for {path_or_url}: {exc}"
-                    ) from exc
-                delay = self._retry_delay(None, attempt)
-                logger.warning("Transient async HTTP error (%s) for %s; retrying in %.2fs", exc, path_or_url, delay)
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    metrics.update(stage="deadline", error="request deadline exceeded")
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}") from exc
-                await asyncio.sleep(min(delay, remaining))
+                await asyncio.sleep(cycle.on_transport_error(exc, attempt))
                 continue
 
             if resp.is_error:
-                if not self._retryable_status(resp.status_code) or attempt >= max_attempts:
-                    metrics.update(
-                        stage="http_error",
-                        status_code=resp.status_code,
-                        error=f"HTTP error {resp.status_code} for {path_or_url}",
-                    )
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    self._raise_http_error(resp, path_or_url)
-                delay = self._retry_delay(resp, attempt)
-                logger.warning(
-                    "Retryable async HTTP status %s for %s; retrying in %.2fs",
-                    resp.status_code,
-                    path_or_url,
-                    delay,
-                )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    metrics.update(stage="deadline", error="request deadline exceeded")
-                    self._finish_http_metrics(
-                        metrics,
-                        operation_started=operation_started,
-                        request_started=request_started,
-                    )
-                    self._publish_metrics(metrics)
-                    raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
-                await asyncio.sleep(min(delay, remaining))
+                await asyncio.sleep(cycle.on_error_response(resp, attempt))
                 continue
-            if time.monotonic() >= deadline:
-                metrics.update(stage="deadline", error="request deadline exceeded")
-                self._finish_http_metrics(
-                    metrics,
-                    operation_started=operation_started,
-                    request_started=request_started,
-                )
-                self._publish_metrics(metrics)
-                raise KapDeadlineExceeded(f"Request deadline exceeded for {path_or_url}")
-            metrics["stage"] = "http_success"
-            self._finish_http_metrics(
-                metrics,
-                operation_started=operation_started,
-                request_started=request_started,
-            )
-            self._publish_metrics(metrics)
-            return resp
+            return cycle.finish(resp)
 
         raise KapConnectionError(f"Request failed for {path_or_url}")
+
+
+class _RequestCycle:
+    """Retry, deadline and metrics policy shared by both HTTP transports.
+
+    ``request_sync`` and ``request_async`` differ only in how they sleep, send
+    and (for async) reserve a concurrency slot. Everything else - the attempt
+    budget, the deadline checks, the backoff decision and every metrics field
+    published on success or failure - lives here so the two loops cannot drift
+    apart.
+    """
+
+    def __init__(
+        self,
+        scraper: BaseScraper,
+        path_or_url: str,
+        timing: dict[str, Any] | None,
+        deadline_at: float | None,
+        label: str = "",
+    ) -> None:
+        self.scraper = scraper
+        self.path_or_url = path_or_url
+        self.label = label
+        self.deadline = deadline_at or scraper.operation_deadline()
+        self.operation_started = time.perf_counter()
+        self.max_attempts = scraper._max_attempts()
+        self.metrics = scraper._timing_context(timing, scraper.last_request_metrics)
+        self.metrics["stage"] = "request"
+        self.request_started: float | None = None
+
+    # ── terminal exits ───────────────────────────────────────────────────────
+
+    def _publish(self, stage: str, error: str, **extra: Any) -> None:
+        self.metrics.update(stage=stage, error=error, **extra)
+        self.scraper._finish_http_metrics(
+            self.metrics,
+            operation_started=self.operation_started,
+            request_started=self.request_started,
+        )
+        self.scraper._publish_metrics(self.metrics)
+
+    def _deadline(self, error: str, message: str) -> KapDeadlineExceeded:
+        self._publish("deadline", error)
+        return KapDeadlineExceeded(message)
+
+    def _expired(self) -> KapDeadlineExceeded:
+        return self._deadline(
+            "request deadline exceeded",
+            f"Request deadline exceeded for {self.path_or_url}",
+        )
+
+    def slot_deadline(self) -> KapDeadlineExceeded:
+        """Report a deadline reached while waiting for a concurrency slot."""
+        return self._deadline(
+            "request deadline exceeded waiting for concurrency slot",
+            f"Request deadline exceeded waiting for concurrency slot: {self.path_or_url}",
+        )
+
+    # ── per-attempt lifecycle ────────────────────────────────────────────────
+
+    def begin_attempt(self, attempt: int) -> float:
+        """Record the attempt and return the budget left for this request."""
+        self.metrics["attempts"] = attempt
+        self.request_started = None
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._expired()
+        return remaining
+
+    def check_budget_before_request(self) -> float:
+        """Re-check the budget after an await that could have consumed it."""
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._deadline(
+                "request deadline exceeded before HTTP request",
+                f"Request deadline exceeded for {self.path_or_url}",
+            )
+        return remaining
+
+    def start_request(self) -> None:
+        self.request_started = time.perf_counter()
+
+    def record_ttfb(self) -> None:
+        self.metrics["ttfb_s"] = round(time.perf_counter() - (self.request_started or 0.0), 6)
+
+    def record_download(self) -> None:
+        elapsed = time.perf_counter() - (self.request_started or 0.0)
+        self.metrics["download_s"] = round(elapsed - float(self.metrics["ttfb_s"]), 6)
+
+    def record_sent(self) -> None:
+        self.metrics["request_s"] = round(time.perf_counter() - (self.request_started or 0.0), 6)
+        self.metrics["fetch_s"] = round(time.perf_counter() - self.operation_started, 6)
+
+    # ── retry decisions ──────────────────────────────────────────────────────
+
+    def _backoff(self, delay: float) -> float:
+        """Clamp the backoff to the deadline, or raise once no room is left."""
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._expired()
+        return min(delay, remaining)
+
+    def on_transport_error(self, exc: Exception, attempt: int) -> float:
+        """Handle a connect/read failure: return the backoff, or raise."""
+        if attempt >= self.max_attempts:
+            self._publish("error", f"{type(exc).__name__}: {exc}")
+            raise KapConnectionError(
+                f"Request failed after {attempt} attempts for {self.path_or_url}: {exc}"
+            ) from exc
+        delay = self.scraper._retry_delay(None, attempt)
+        logger.warning(
+            "Transient %sHTTP error (%s) for %s; retrying in %.2fs",
+            self.label,
+            exc,
+            self.path_or_url,
+            delay,
+        )
+        try:
+            return self._backoff(delay)
+        except KapDeadlineExceeded as deadline:
+            raise deadline from exc
+
+    def on_error_response(self, response: httpx.Response, attempt: int) -> float:
+        """Handle an error status: return the backoff, or raise."""
+        if not self.scraper._retryable_status(response.status_code) or attempt >= self.max_attempts:
+            self._publish(
+                "http_error",
+                f"HTTP error {response.status_code} for {self.path_or_url}",
+                status_code=response.status_code,
+            )
+            self.scraper._raise_http_error(response, self.path_or_url)
+        delay = self.scraper._retry_delay(response, attempt)
+        logger.warning(
+            "Retryable %sHTTP status %s for %s; retrying in %.2fs",
+            self.label,
+            response.status_code,
+            self.path_or_url,
+            delay,
+        )
+        return self._backoff(delay)
+
+    # ── success ──────────────────────────────────────────────────────────────
+
+    def finish(self, response: httpx.Response) -> httpx.Response:
+        """Publish the terminal success metrics for a usable response."""
+        if time.monotonic() >= self.deadline:
+            raise self._expired()
+        self.metrics["stage"] = "http_success"
+        self.scraper._finish_http_metrics(
+            self.metrics,
+            operation_started=self.operation_started,
+            request_started=self.request_started,
+        )
+        self.scraper._publish_metrics(self.metrics)
+        return response
+
+
+class _ParseCycle:
+    """Deadline and metrics bookkeeping shared by both parser runners.
+
+    ``run_with_deadline_sync`` and ``run_with_deadline_async`` differ only in
+    how they wait for the worker thread. Keeping the published stages here also
+    fixes the async runner never reporting a ``parse_error`` stage.
+    """
+
+    def __init__(self, scraper: Any, deadline_at: float) -> None:
+        self.scraper = scraper
+        self.deadline_at = deadline_at
+        self.parse_started = time.perf_counter()
+        self.metrics = dict(getattr(scraper, "last_request_metrics", {}))
+        self.metrics["stage"] = "parse"
+        self.publish()
+
+    def publish(self) -> None:
+        # Scrapers may be driven by a lightweight stand-in transport in tests,
+        # so fall back to the plain attribute when the hook is absent.
+        publish = getattr(self.scraper, "_publish_metrics", None)
+        if callable(publish):
+            publish(self.metrics)
+        else:
+            setattr(self.scraper, "last_request_metrics", dict(self.metrics))
+
+    def _elapsed(self) -> float:
+        return round(time.perf_counter() - self.parse_started, 6)
+
+    def _record_total(self) -> None:
+        self.metrics["total_s"] = round(
+            float(self.metrics.get("fetch_s", 0)) + float(self.metrics["parse_s"]), 6
+        )
+
+    def remaining(self) -> float:
+        """Return the parse budget, or raise when it is already spent."""
+        left = self.deadline_at - time.monotonic()
+        if left <= 0:
+            self.metrics.update(stage="deadline", error="operation deadline exceeded before parsing")
+            self.publish()
+            raise KapDeadlineExceeded("Operation deadline exceeded before parsing")
+        return left
+
+    def timed_out(self) -> KapDeadlineExceeded:
+        self.metrics.update(
+            stage="deadline",
+            parse_s=self._elapsed(),
+            error="operation deadline exceeded during parsing",
+        )
+        self._record_total()
+        self.publish()
+        return KapDeadlineExceeded("Operation deadline exceeded after parsing started")
+
+    def failed(self, exc: BaseException) -> BaseException:
+        self.metrics.update(
+            stage="parse_error",
+            parse_s=self._elapsed(),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        self.publish()
+        return exc
+
+    def succeeded(self, value: Any) -> Any:
+        self.metrics.update(stage="ok", parse_s=self._elapsed())
+        self._record_total()
+        self.publish()
+        return value
