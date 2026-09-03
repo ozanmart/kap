@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 from datetime import datetime as dt_cls, timedelta
 import logging
@@ -694,21 +695,30 @@ class DisclosuresScraper:
         to_d = to_date or dt_cls.today().date()
 
         route = ENDPOINT_HISTORICAL_DISCLOSURES.format(lang=self.config.lang)
-        results: list[Disclosure] = []
-        for start, end in _historical_date_windows(from_d, to_d):
+
+        async def fetch_window(start: datetime.date, end: datetime.date) -> list[Disclosure]:
             resp = await self.base.request_async(
                 "POST",
                 route,
                 json=_historical_payload(member_oid, start, end, disclosure_class, subject_oid),
             )
-            rows = await self.base.run_with_deadline_async(
-                lambda resp=resp: [
+            return await self.base.run_with_deadline_async(
+                lambda: [
                     _normalize_raw_disclosure(x, self.config.lang)
                     for x in _require_list_payload(resp.json(), endpoint="historical disclosures")
                     if isinstance(x, dict)
                 ],
                 deadline_at=self.base.operation_deadline(),
             )
+
+        # KAP only accepts one-year windows, so a decade-long query is ten
+        # requests. Run them concurrently under the shared max_concurrency
+        # semaphore instead of paying ten sequential round trips; gather
+        # preserves window order, so deduplication still keeps the earliest
+        # window's payload for a disclosure that appears in two windows.
+        windows = _historical_date_windows(from_d, to_d)
+        results: list[Disclosure] = []
+        for rows in await asyncio.gather(*(fetch_window(start, end) for start, end in windows)):
             results.extend(rows)
         return sorted(_dedupe_disclosures(results), key=lambda item: item.disclosure_index, reverse=True)
 

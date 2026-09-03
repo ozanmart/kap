@@ -666,27 +666,47 @@ class AsyncKapClient:
             )
             return _load(FinancialStatement, raw_statement)
 
-        # Usually one candidate survives the year/period filter, so this is a
-        # single fetch. When more than one does (e.g. a corrected/duplicate
-        # filing), fetch every candidate's statement concurrently instead of
-        # one sequential round trip at a time, then keep the first success in
-        # the same highest-disclosure-index-first preference order as before.
         ordered = sorted(matching, key=lambda item: item.disclosure_index, reverse=True)
-        results = await asyncio.gather(*(fetch_one(item) for item in ordered), return_exceptions=True)
-
         failures: list[str] = []
-        for selected, outcome in zip(ordered, results):
+
+        def accept(selected: Disclosure, outcome: Any) -> FinancialStatement | None:
+            """Keep the first usable statement in preference order, else record why."""
             if isinstance(outcome, BaseException):
                 failures.append(f"#{selected.disclosure_index}: {type(outcome).__name__}: {outcome}")
-                continue
-            statement = outcome
-            if statement.items and any(str(year) in label for label in statement.period_labels):
-                if self.db:
-                    self.db.save_financial_statement(statement)
-                return statement
+                return None
+            if outcome.items and any(str(year) in label for label in outcome.period_labels):
+                return outcome
             failures.append(
-                f"#{selected.disclosure_index}: items={len(statement.items)}, periods={statement.period_labels}"
+                f"#{selected.disclosure_index}: items={len(outcome.items)}, periods={outcome.period_labels}"
             )
+            return None
+
+        # The highest-index filing satisfies almost every lookup, so fetch it
+        # alone rather than paying for every candidate up front. Only a
+        # corrected or duplicate filing reaches the fallback below, and those
+        # remaining candidates are then fetched concurrently rather than one
+        # sequential round trip at a time.
+        head, rest = ordered[0], ordered[1:]
+        try:
+            statement = await fetch_one(head)
+        except Exception as exc:  # noqa: BLE001 - reported alongside the other candidates
+            outcome: Any = exc
+        else:
+            outcome = statement
+        usable = accept(head, outcome)
+        if usable is not None:
+            if self.db:
+                self.db.save_financial_statement(usable)
+            return usable
+
+        if rest:
+            results = await asyncio.gather(*(fetch_one(item) for item in rest), return_exceptions=True)
+            for selected, result in zip(rest, results):
+                usable = accept(selected, result)
+                if usable is not None:
+                    if self.db:
+                        self.db.save_financial_statement(usable)
+                    return usable
         wanted = f"{year}{f'/{period}' if period else ''}"
         raise KapValidationError(
             f"Financial-report candidates for {ticker.upper()} ({wanted}) contained no usable statement: "

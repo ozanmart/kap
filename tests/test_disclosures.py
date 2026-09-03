@@ -152,3 +152,49 @@ def test_historical_flat_payload_is_normalized_using_current_kap_fields() -> Non
     assert row.title == "Finansal Rapor"
     assert row.disclosure_type == "FR"
     assert row.disclosure_class == "FR"
+
+
+def test_async_historical_windows_are_fetched_concurrently() -> None:
+    """KAP only accepts one-year windows, so a multi-year query is several
+    requests. They must overlap instead of costing one round trip each."""
+    in_flight = 0
+    peak = 0
+
+    class ConcurrentBase:
+        async def request_async(self, method, path, **kwargs):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            try:
+                await asyncio.sleep(0.01)
+            finally:
+                in_flight -= 1
+            window = kwargs["json"]["fromDate"]
+            return SimpleNamespace(json=lambda window=window: [{
+                "disclosureIndex": int(window[:4]),
+                "publishDate": f"01.01.{window[:4]} 09:00:00",
+                "stockCodes": "THYAO",
+                "subject": "Finansal Rapor",
+            }])
+
+        def operation_deadline(self):
+            return None
+
+        async def run_with_deadline_async(self, func, *, deadline_at):
+            return func()
+
+    scraper = DisclosuresScraper(base_scraper=ConcurrentBase())
+
+    rows = asyncio.run(
+        scraper.aget_historical_disclosures_by_criteria(
+            member_oid="oid",
+            from_date=datetime.date(2021, 1, 1),
+            to_date=datetime.date(2025, 1, 1),
+        )
+    )
+
+    assert len(_historical_date_windows(datetime.date(2021, 1, 1), datetime.date(2025, 1, 1))) > 1
+    assert peak > 1
+    assert [row.disclosure_index for row in rows] == sorted(
+        (row.disclosure_index for row in rows), reverse=True
+    )

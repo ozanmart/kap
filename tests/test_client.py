@@ -350,11 +350,11 @@ def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
     assert selectors == [2024]
 
 
-def test_async_client_get_financials_fetches_candidates_concurrently(monkeypatch):
-    """When more than one FR disclosure matches the year/period filter (e.g. an
-    original filing plus a correction), the async client fetches every
-    candidate's statement concurrently instead of stopping at the first
-    success, then still returns the highest-index usable one."""
+def test_async_client_get_financials_falls_back_concurrently(monkeypatch):
+    """The highest-index filing satisfies almost every lookup, so it is fetched
+    alone. Only when it turns out to be unusable (e.g. an empty original filing
+    superseded by a correction) are the remaining candidates fetched, and those
+    go out concurrently rather than one sequential round trip at a time."""
     candidates = [
         Disclosure(
             disclosure_id="a",
@@ -593,3 +593,50 @@ def test_sync_and_async_clients_can_read_each_others_cache_entries(tmp_path):
 
     assert isinstance(cached, CompanyGeneralInfo)
     assert cached.company_title == "ACME A.Ş."
+
+
+def test_async_client_get_financials_stops_after_the_first_usable_candidate(monkeypatch):
+    """A usable highest-index filing must not trigger fetches for the older
+    candidates behind it; those requests would be pure waste against KAP."""
+    candidates = [
+        Disclosure(disclosure_id="a", disclosure_index=902, title="2024 Yıllık Finansal Rapor", disclosure_type="FR"),
+        Disclosure(disclosure_id="b", disclosure_index=900, title="2024 Yıllık Finansal Rapor", disclosure_type="FR"),
+    ]
+    usable = FinancialStatement(
+        disclosure_index=902,
+        stock_code="THYAO",
+        period_labels=["31.12.2024"],
+        items=[
+            FinancialLineItem(
+                disclosure_index=902,
+                statement_role_code="210015",
+                statement_name="balance_sheet",
+                taxonomy_code="cash",
+                period_label="31.12.2024",
+                value_text="1",
+            )
+        ],
+    )
+    fetched: list[int] = []
+
+    async def fake_resolve(ticker):
+        return "oid"
+
+    async def fake_get_company_disclosures(**kwargs):
+        return candidates
+
+    async def fake_get_financial_statement(disclosure_index, **kwargs):
+        fetched.append(disclosure_index)
+        return usable
+
+    async def run():
+        async with AsyncKapClient(KapConfig(enable_cache=False)) as client:
+            monkeypatch.setattr(client, "_resolve_member_oid", fake_resolve)
+            monkeypatch.setattr(client.disclosures, "aget_company_disclosures", fake_get_company_disclosures)
+            monkeypatch.setattr(client.financials, "aget_financial_statement", fake_get_financial_statement)
+            return await client.get_financials("THYAO", 2024, "annual")
+
+    result = asyncio.run(run())
+
+    assert result.disclosure_index == 902
+    assert fetched == [902]

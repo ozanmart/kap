@@ -26,6 +26,13 @@
   while the registry holds `ŞİŞE`, so the query and the index could never meet.
   Both sides are now folded through one Turkish-aware table, which also makes
   diacritic-free queries such as `sise cam` or `turk hava` work.
+- `AsyncKapClient.get_historical_disclosures` now fetches KAP's mandatory
+  one-year query windows concurrently; a decade-long query no longer costs ten
+  sequential round trips.
+- `AsyncKapClient.get_financials` no longer fetches every matching candidate up
+  front. It resolves the highest-index filing first, which satisfies nearly
+  every lookup, and only falls back to the remaining candidates - concurrently -
+  when that one is unusable.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser
