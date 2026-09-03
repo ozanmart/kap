@@ -30,6 +30,30 @@ def _cache_key(config: KapConfig, namespace: str, **parts: Any) -> str:
     return f"kap:v{config.parser_schema_version}:{namespace}:{digest}"
 
 
+# Sync and async clients share one cache namespace and one cache directory, so
+# they must also agree on the stored representation. Both store plain
+# dictionaries: a cache entry written by either client is readable by the other,
+# and a pickled model class never has to survive a package upgrade.
+def _dump(model: Any) -> dict[str, Any]:
+    """Serialize one model for the shared cache."""
+    return model.model_dump()
+
+
+def _dump_all(models: Any) -> list[dict[str, Any]]:
+    """Serialize a list of models for the shared cache."""
+    return [item.model_dump() for item in models]
+
+
+def _load(model_cls: Any, raw: Any) -> Any:
+    """Rebuild one model from a cached payload written by either client."""
+    return model_cls(**raw) if isinstance(raw, dict) else raw
+
+
+def _load_all(model_cls: Any, raw: Any) -> list[Any]:
+    """Rebuild a list of models from a cached payload written by either client."""
+    return [model_cls(**item) if isinstance(item, dict) else item for item in raw]
+
+
 class KapClient:
     """Synchronous client for KAP (Public Disclosure Platform) and Borsa Istanbul."""
 
@@ -169,16 +193,19 @@ class KapClient:
         refresh_async: bool = False,
     ) -> list[Company]:
         """Fetch list of all BIST companies (offline bundled snapshot by default)."""
+        from .models.company import Company
+
         self._begin_operation("companies")
         key = self._cache_key("companies", online=online, lang=self.config.lang)
-        companies = self._cached_call(
+        raw = self._cached_call(
             key,
-            lambda: self.listings.get_companies(online=online),
+            lambda: _dump_all(self.listings.get_companies(online=online)),
             expire=self.config.cache_expiry_companies,
             force_refresh=force_refresh,
             refresh_async=refresh_async,
             enforce_deadline=online,
         )
+        companies = _load_all(Company, raw)
         registry_metrics = getattr(self.listings, "last_registry_metrics", {})
         if registry_metrics.get("operation_id") == self.last_request_metrics.get("operation_id"):
             self.last_request_metrics = dict(registry_metrics)
@@ -216,15 +243,18 @@ class KapClient:
 
     def get_company_general_info(self, ticker_or_oid: str, force_refresh: bool = False) -> CompanyGeneralInfo:
         """Get comprehensive company profile (shareholders >=5%, float, subsidiaries, etc.)."""
+        from .models.company import CompanyGeneralInfo
+
         self._begin_operation("company_general")
         oid = self._resolve_member_oid(ticker_or_oid)
         key = self._cache_key("company-general", oid=oid, lang=self.config.lang)
-        info = self._cached_call(
+        raw = self._cached_call(
             key,
-            lambda: self.company_general.get_company_general_info(oid),
+            lambda: _dump(self.company_general.get_company_general_info(oid)),
             expire=self.config.cache_expiry_company_general,
             force_refresh=force_refresh,
         )
+        info = _load(CompanyGeneralInfo, raw)
         if not info.company_title:
             raise KapNotFoundError(f"No company profile found for '{ticker_or_oid}'")
         if not info.ticker:
@@ -238,33 +268,39 @@ class KapClient:
 
     def get_indices(self, force_refresh: bool = False) -> list[Indice]:
         """Get all BIST indices and their member stock codes."""
+        from .models.market import Indice
+
         self._begin_operation("indices")
-        return self._cached_call(
+        return _load_all(Indice, self._cached_call(
             self._cache_key("indices", lang=self.config.lang),
-            lambda: self.listings.get_indices(),
+            lambda: _dump_all(self.listings.get_indices()),
             expire=self.config.cache_expiry_indices,
             force_refresh=force_refresh,
-        )
+        ))
 
     def get_sectors(self, force_refresh: bool = False) -> list[Sector]:
-        """Get all sectors and subsectors with member stocks."""
+        """Get all sectors with their member stocks."""
+        from .models.market import Sector
+
         self._begin_operation("sectors")
-        return self._cached_call(
+        return _load_all(Sector, self._cached_call(
             self._cache_key("sectors", lang=self.config.lang),
-            lambda: self.listings.get_sectors(),
+            lambda: _dump_all(self.listings.get_sectors()),
             expire=self.config.cache_expiry_sectors,
             force_refresh=force_refresh,
-        )
+        ))
 
     def get_markets(self, force_refresh: bool = False) -> list[Market]:
         """Get all trading market segments (Yıldız Pazar, etc.) with member stocks."""
+        from .models.market import Market
+
         self._begin_operation("markets")
-        return self._cached_call(
+        return _load_all(Market, self._cached_call(
             self._cache_key("markets", lang=self.config.lang),
-            lambda: self.listings.get_markets(),
+            lambda: _dump_all(self.listings.get_markets()),
             expire=self.config.cache_expiry_markets,
             force_refresh=force_refresh,
-        )
+        ))
 
     # ── Disclosures ──────────────────────────────────────────────────────────
 
@@ -274,6 +310,8 @@ class KapClient:
         disclosure_types: list[str] | None = None,
     ) -> list[Disclosure]:
         """Get today's live disclosures in Istanbul time."""
+        from .models.disclosure import Disclosure
+
         self._begin_operation("today_disclosures")
         key = self._cache_key(
             "today",
@@ -281,14 +319,14 @@ class KapClient:
             disclosure_types=sorted(disclosure_types or []),
             lang=self.config.lang,
         )
-        disclosures = self._cached_call(
+        disclosures = _load_all(Disclosure, self._cached_call(
             key,
-            lambda: self.disclosures.get_today_disclosures(
+            lambda: _dump_all(self.disclosures.get_today_disclosures(
                 member_type=member_type,
                 disclosure_types=disclosure_types,
-            ),
+            )),
             expire=self.config.cache_expiry_today,
-        )
+        ))
         if self.db and disclosures:
             self.db.save_disclosures(disclosures)
         return disclosures
@@ -300,6 +338,8 @@ class KapClient:
         disclosure_types: list[str] | None = None,
     ) -> list[Disclosure]:
         """Get latest disclosures across all markets or for a specific ticker."""
+        from .models.disclosure import Disclosure
+
         self._begin_operation("latest_disclosures")
         limit = positive_int(limit, "limit", maximum=200)
         ticker = normalize_ticker(ticker) if ticker else None
@@ -311,13 +351,13 @@ class KapClient:
             lang=self.config.lang,
         )
 
-        def fetch() -> list[Disclosure]:
+        def fetch() -> list[dict[str, Any]]:
             if not ticker:
-                return self.disclosures.get_latest_disclosures(
+                return _dump_all(self.disclosures.get_latest_disclosures(
                     limit=limit,
                     ticker=None,
                     disclosure_types=disclosure_types,
-                )
+                ))
             oid = self._resolve_member_oid(ticker)
             rows = self.disclosures.get_company_disclosures(
                 member_oid=oid,
@@ -336,13 +376,13 @@ class KapClient:
                 wanted = {item.upper() for item in disclosure_types}
                 rows = [row for row in rows if (row.disclosure_type or "").upper() in wanted]
             rows.sort(key=lambda row: row.disclosure_index, reverse=True)
-            return rows[: max(0, int(limit))]
+            return _dump_all(rows[: max(0, int(limit))])
 
-        disclosures = self._cached_call(
+        disclosures = _load_all(Disclosure, self._cached_call(
             key,
             fetch,
             expire=self.config.cache_expiry_latest,
-        )
+        ))
         if self.db and disclosures:
             self.db.save_disclosures(disclosures)
         return disclosures
@@ -355,6 +395,8 @@ class KapClient:
         limit: int = 50,
     ) -> list[Disclosure]:
         """Get historical disclosures for a specific company."""
+        from .models.disclosure import Disclosure
+
         self._begin_operation("company_disclosures")
         range_days = positive_int(range_days, "range_days", maximum=3650)
         limit = positive_int(limit, "limit", maximum=200)
@@ -367,16 +409,16 @@ class KapClient:
             limit=limit,
             lang=self.config.lang,
         )
-        disclosures = self._cached_call(
+        disclosures = _load_all(Disclosure, self._cached_call(
             key,
-            lambda: self.disclosures.get_company_disclosures(
+            lambda: _dump_all(self.disclosures.get_company_disclosures(
                 member_oid=oid,
                 notification_type=notification_type,
                 range_value=range_days,
                 limit=limit,
-            ),
+            )),
             expire=self.config.cache_expiry_default,
-        )
+        ))
         if self.db and disclosures:
             self.db.save_disclosures(disclosures)
         return disclosures
@@ -390,6 +432,8 @@ class KapClient:
         subject_oid: str | None = None,
     ) -> list[Disclosure]:
         """Query historical disclosures via criteria POST endpoint."""
+        from .models.disclosure import Disclosure
+
         self._begin_operation("historical_disclosures")
         validate_date_range(from_date, to_date)
         oid = self._resolve_member_oid(ticker_or_oid)
@@ -403,17 +447,17 @@ class KapClient:
             subject_oid=effective_subject_oid,
             lang=self.config.lang,
         )
-        return self._cached_call(
+        return _load_all(Disclosure, self._cached_call(
             key,
-            lambda: self.disclosures.get_historical_disclosures_by_criteria(
+            lambda: _dump_all(self.disclosures.get_historical_disclosures_by_criteria(
                 member_oid=oid,
                 from_date=from_date,
                 to_date=to_date,
                 disclosure_class=disclosure_class,
                 subject_oid=effective_subject_oid,
-            ),
+            )),
             expire=self.config.cache_expiry_default,
-        )
+        ))
 
     def get_company_disclosures_by_type(self, ticker_or_oid: str, disclosure_type: str = "FAR") -> list[dict[str, Any]]:
         """Fetch disclosures of a specific type (e.g. 'FAR' - Activity Reports, 'KYUR', 'SUR', 'KDP')."""
@@ -432,26 +476,30 @@ class KapClient:
 
     def get_disclosure_detail(self, disclosure_index: int | str) -> DisclosureDetail:
         """Fetch disclosure detail and plain-text body by announcement index."""
+        from .models.disclosure import DisclosureDetail
+
         self._begin_operation("disclosure_detail")
         disclosure_index = positive_int(disclosure_index, "disclosure_index")
         key = self._cache_key("detail", disclosure_index=int(disclosure_index), lang=self.config.lang)
-        return self._cached_call(
+        return _load(DisclosureDetail, self._cached_call(
             key,
-            lambda: self.disclosures.get_disclosure_detail(disclosure_index),
+            lambda: _dump(self.disclosures.get_disclosure_detail(disclosure_index)),
             expire=self.config.cache_expiry_disclosure_detail,
-        )
+        ))
 
     def get_expected_disclosures(self, days_ahead: int = 180, ticker_or_oid: str | None = None) -> list[ExpectedDisclosure]:
         """Fetch expected forward-looking earnings release calendar."""
+        from .models.disclosure import ExpectedDisclosure
+
         self._begin_operation("expected_disclosures")
         days_ahead = positive_int(days_ahead, "days_ahead", maximum=3650)
         oid = self._resolve_member_oid(ticker_or_oid) if ticker_or_oid else None
         key = self._cache_key("calendar", days_ahead=days_ahead, member_oid=oid or "", lang=self.config.lang)
-        return self._cached_call(
+        return _load_all(ExpectedDisclosure, self._cached_call(
             key,
-            lambda: self.calendar.get_expected_disclosures(days_ahead=days_ahead, member_oid=oid),
+            lambda: _dump_all(self.calendar.get_expected_disclosures(days_ahead=days_ahead, member_oid=oid)),
             expire=self.config.cache_expiry_calendar,
-        )
+        ))
 
     # ── Financials ───────────────────────────────────────────────────────────
 
@@ -462,6 +510,8 @@ class KapClient:
         force_refresh: bool = False,
     ) -> FinancialStatement:
         """Fetch and parse financial statement tables for an announcement."""
+        from .models.financials import FinancialStatement
+
         self._begin_operation("financial_statement")
         disclosure_index = positive_int(disclosure_index, "disclosure_index")
         ticker = normalize_ticker(ticker) if ticker else None
@@ -471,12 +521,12 @@ class KapClient:
             ticker=(ticker or "").upper(),
             disclosure_index=int(disclosure_index),
         )
-        stmt = self._cached_call(
+        stmt = _load(FinancialStatement, self._cached_call(
             key,
-            lambda: self.financials.get_financial_statement(disclosure_index, stock_code=ticker),
+            lambda: _dump(self.financials.get_financial_statement(disclosure_index, stock_code=ticker)),
             expire=self.config.cache_expiry_financials,
             force_refresh=force_refresh,
-        )
+        ))
         if self.db and stmt:
             self.db.save_financial_statement(stmt)
         return stmt
@@ -489,6 +539,9 @@ class KapClient:
         force_refresh: bool = False,
     ) -> FinancialStatement:
         """Find the matching financial-report disclosure and return its statement."""
+        from .models.disclosure import Disclosure
+        from .models.financials import FinancialStatement
+
         self._begin_operation("financials_lookup")
         ticker = normalize_ticker(ticker)
         year = positive_int(year, "year", maximum=2100)
@@ -496,7 +549,7 @@ class KapClient:
         candidates: list[Disclosure] = []
         matching: list[Disclosure] = []
         for selector_year in _financial_selector_years(year, period):
-            rows = self._cached_call(
+            rows = _load_all(Disclosure, self._cached_call(
                 self._cache_key(
                     "company-disclosures",
                     oid=oid,
@@ -505,14 +558,14 @@ class KapClient:
                     limit=200,
                     lang=self.config.lang,
                 ),
-                lambda selector_year=selector_year: self.disclosures.get_company_disclosures(
+                lambda selector_year=selector_year: _dump_all(self.disclosures.get_company_disclosures(
                     member_oid=oid,
                     notification_type="FR",
                     range_value=selector_year,
                     limit=200,
-                ),
+                )),
                 expire=self.config.cache_expiry_default,
-            )
+            ))
             seen = {item.disclosure_index for item in candidates}
             candidates.extend(item for item in rows if item.disclosure_index not in seen)
             matching = [
@@ -528,21 +581,21 @@ class KapClient:
             raise KapNotFoundError(f"No financial report found for {ticker.upper()} ({wanted})")
         failures: list[str] = []
         for selected in sorted(matching, key=lambda item: item.disclosure_index, reverse=True):
-            statement = self._cached_call(
+            statement = _load(FinancialStatement, self._cached_call(
                 self._cache_key(
                     "financial-statement",
                     lang=self.config.lang,
                     ticker=ticker.upper(),
                     disclosure_index=int(selected.disclosure_index),
                 ),
-                lambda selected=selected: self.financials.get_financial_statement(
+                lambda selected=selected: _dump(self.financials.get_financial_statement(
                     selected.disclosure_index,
                     stock_code=ticker.upper(),
                     company_title=selected.company_title,
-                ),
+                )),
                 expire=self.config.cache_expiry_financials,
                 force_refresh=force_refresh,
-            )
+            ))
             if statement.items and any(str(year) in label for label in statement.period_labels):
                 if self.db:
                     self.db.save_financial_statement(statement)
@@ -587,6 +640,7 @@ class KapClient:
         ticker: str | None = None,
     ) -> list[DerivedEvent]:
         """Extract every supported event and recover missing disclosure metadata when possible."""
+        from .models.disclosure import DisclosureDetail
         from .parsing.event_extractor import extract_multiple_events_from_text
 
         self._begin_operation("event_extraction")
@@ -603,11 +657,11 @@ class KapClient:
         # A caller may provide body text while omitting the ticker. Fetch the detail
         # page in that case for identity/title metadata without replacing the text.
         if disc_index and detail is None and (body_text is None or not explicit_stock and resolved_stock == "UNKNOWN"):
-            detail = self._cached_call(
+            detail = _load(DisclosureDetail, self._cached_call(
                 self._cache_key("detail", disclosure_index=disc_index, lang=self.config.lang),
-                lambda: self.disclosures.get_disclosure_detail(disc_index),
+                lambda: _dump(self.disclosures.get_disclosure_detail(disc_index)),
                 expire=self.config.cache_expiry_disclosure_detail,
-            )
+            ))
             disc_id = disc_id or detail.disclosure_id or ""
             title = title or detail.title
             pub_date = pub_date or detail.publish_date

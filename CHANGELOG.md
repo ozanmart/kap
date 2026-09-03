@@ -2,6 +2,26 @@
 
 ## 0.1.0 — unreleased
 
+- Fixed the sync client raising `AttributeError: 'dict' object has no attribute
+  ...` (or silently returning `list[dict]`) for any entry the async client had
+  written to the shared cache. Both clients use one cache namespace and one
+  cache directory but stored different representations: model instances on the
+  sync side, `model_dump()` dictionaries on the async side. Both now store
+  dictionaries through shared `_dump`/`_load` helpers, so either client can read
+  the other's entries and no pickled model class has to survive an upgrade.
+- Fixed `AsyncKapClient.extract_events`/`extract_events_many` still
+  misclassifying routine Financial Report filings as false-positive events
+  (e.g. `BUYBACK`); the FR guard now reads `disclosure_type` from the detail
+  object, matching the sync client.
+- Fixed `AsyncKapClient.get_company_general_info` returning an all-blank profile
+  for an unknown ticker instead of raising `KapNotFoundError`.
+- Added behavioral sync/async parity coverage for the FR guard, the not-found
+  guard and cross-client cache interoperability. The existing parity test only
+  compared method names, which is why these three defects reached the branch.
+- Fixed `tests/test_profiles_lazy.py` running its short-lived-process subprocess
+  without `PYTHONPATH`, so that test exercised whatever `kap` was installed in
+  the environment rather than this checkout.
+
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser
   only recognized `tbl_general_role_*` table classes, missing the
