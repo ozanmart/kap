@@ -120,6 +120,51 @@ kap mcp
 `--json-out` is available on `today`, `detail`, `financials` and `taxonomy`.
 Use `kap --help` and [docs/cli.md](docs/cli.md) for the complete option matrix.
 
+## Benchmark
+
+`kap` is measured against the three other public Python projects that read the
+same KAP surfaces. Every repository/scenario/load combination runs in its own
+subprocess on one interpreter, deterministic scenarios replay identical captured
+payloads so nobody is scored on network luck, and each run's output is checked
+before its speed counts for anything.
+
+The run reduces to one **KAP Index** per project on a 0-1000 scale, where 1000
+means best-in-suite on every category simultaneously.
+
+| # | Project | KAP Index | Correctness | Coverage | Speed | Reliability | Memory |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | **kap (this package)** | **959** | 1.00 | 12/12 | 0.82 | 1.00 | 0.96 |
+| 2 | kap-tr-sdk | 625 | 0.50 | 4/12 | 0.85 | 1.00 | 0.63 |
+| 3 | bist-investment-agent (KAP web only) | 620 | 0.33 | 5/12 | 0.86 | 1.00 | 0.98 |
+| 4 | pykap | 486 | 0.50 | 5/12 | 0.11 | 1.00 | 0.56 |
+
+<sub>`standard` profile, 176 measurements, loads of 1/5/10/25/50 operations,
+CPython 3.13, offline scenarios only. Reproduce with
+`python -m benchmarks.run --profile standard`; numbers move with hardware.</sub>
+
+What the index is built from, and why it is weighted this way:
+
+| Category | Weight | Definition |
+| --- | ---: | --- |
+| Correctness | 35% | Share of a project's own runs whose output passed its deterministic check. |
+| Capability coverage | 20% | Share of the suite's scenarios the project can perform at all. |
+| Relative speed | 20% | Per scenario and load, `fastest p50 / this p50`, averaged. |
+| Reliability | 15% | `1 - (error rate + timeout rate)` over everything attempted. |
+| Memory efficiency | 10% | Per scenario and load, `lowest peak RSS / this peak RSS`, averaged. |
+
+A row that fails its correctness check is excluded from the speed and memory
+comparisons, so being fast and wrong earns nothing. Speed is only ever compared
+within the same scenario and load. Coverage is measured against the scenarios
+the benchmark attempted, so a project is never charged for a capability nobody
+was asked to demonstrate — but skipping most of the suite cannot lift the
+remaining averages into a better index than completing all of it.
+
+`kap` leads on correctness (37/37 verified rows) and coverage (the only project
+that runs all twelve scenarios), not on raw speed: two of the others parse a
+single replayed page marginally faster. Full methodology, the per-row table and
+the scoring rules live in [benchmarks/README.md](benchmarks/README.md), and the
+scoring module is unit tested in `tests/test_benchmark_scoring.py`.
+
 ## Reliability and data semantics
 
 `KapConfig.for_profile("fast" | "balanced" | "resilient")` selects the retry and deadline contract. The default is `balanced`. Cache entries can be fresh or stale; `force_refresh=True` bypasses both, while `refresh_async=True` requests stale-while-revalidate. Public failures are raised through `kap.exceptions` (`KapConnectionError`, `KapDeadlineExceeded`, `KapValidationError`, `KapNotFoundError`).

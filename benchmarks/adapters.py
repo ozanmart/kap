@@ -202,6 +202,10 @@ def build_operation(repo: str, scenario: str, fixture_path: Path) -> Operation:
         return _first_live_request(repo)
     if scenario == "listing_replay":
         return _listing_replay(repo, fixture_path)
+    if scenario == "profile_replay":
+        return _profile_replay(repo, fixture_path)
+    if scenario == "feed_normalize":
+        return _feed_normalize(repo, fixture_path)
     if scenario == "offline_registry":
         return _offline_registry(repo)
     if scenario == "offline_exact_lookup":
@@ -304,6 +308,104 @@ def _listing_replay(repo: str, fixture_path: Path) -> Operation:
         return Operation(invoke, implementation="RSC extraction + workflow normalization")
 
     raise UnsupportedScenario(repo)
+
+
+PROFILE_MEMBER_OID = "4028e4a140f2ed720140f376bebb01a7"
+PROFILE_SOURCE_URL = f"https://www.kap.org.tr/tr/sirket-bilgileri/genel/{PROFILE_MEMBER_OID}"
+
+
+def _profile_field_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Compare profile parsers on the scalar fields all of them claim to read."""
+    present = {name for name, value in values.items() if str(value or "").strip()}
+    return {
+        "item_count": len(present),
+        "digest": stable_digest(f"{name}={values[name]}" for name in sorted(present)),
+        "correct": PROFILE_REQUIRED_FIELDS.issubset(present),
+        "sample": sorted(present)[:5],
+    }
+
+
+PROFILE_REQUIRED_FIELDS = {"company_title", "sector", "market"}
+
+
+def _profile_replay(repo: str, fixture_path: Path) -> Operation:
+    """Parse a captured KAP company-profile page. No repository is given a
+    network call, so this isolates parser capability and cost."""
+    html = (fixture_path.parent / "kap_company_general_live.html").read_text(encoding="utf-8")
+
+    if repo == "kap":
+        module = importlib.import_module("kap.scrapers.company_general")
+
+        def invoke() -> dict[str, Any]:
+            info = module.parse_company_general_html(html, PROFILE_MEMBER_OID, PROFILE_SOURCE_URL)
+            return _profile_field_values({
+                "company_title": info.company_title,
+                "sector": info.sector,
+                "market": info.market,
+                "auditor": info.auditor,
+                "website": info.website,
+                "indices": info.indices,
+            })
+
+        return Operation(invoke, implementation="RSC scalar fields with scoped HTML fallback")
+
+    if repo == "bist_agent":
+        module = importlib.import_module("bist_agent.workflows.kap_web.company_general")
+
+        def invoke() -> dict[str, Any]:
+            parsed = module.parse_company_general_bilgiler_html(
+                html=html,
+                member_oid=PROFILE_MEMBER_OID,
+                source_url=PROFILE_SOURCE_URL,
+            )
+            # This parser groups its scalars into nested sections rather than
+            # returning them flat; read them where it actually puts them.
+            activity = parsed.get("faaliyet_alani_ve_bagimsiz_denetim_kurulusu_bilgileri") or {}
+            market = parsed.get("pazar_endeks_ve_sermaye_piyasasi_araclari_bilgileri") or {}
+            return _profile_field_values({
+                "company_title": parsed.get("company_title"),
+                "sector": activity.get("sirketin_sektoru"),
+                "market": market.get("sermaye_piyasasi_aracinin_islem_gordugu_pazar"),
+                "auditor": activity.get("bagimsiz_denetim_kurulusu"),
+                "website": parsed.get("internet_adresi"),
+                "indices": market.get("sirketin_dahil_oldugu_endeksler"),
+            })
+
+        return Operation(invoke, implementation="BeautifulSoup scalar-field extraction")
+
+    raise UnsupportedScenario("repository has no company-profile page parser")
+
+
+def _feed_normalize(repo: str, fixture_path: Path) -> Operation:
+    """Normalize a captured disclosure feed payload into the repository's own
+    row shape, which is the step every KAP client has to get right."""
+    payload = json.loads((fixture_path.parent / "kap_feed_live.json").read_text(encoding="utf-8"))
+    rows = payload if isinstance(payload, list) else payload.get("data", [])
+    expected = {
+        str((row.get("disclosureBasic") or row).get("disclosureIndex") or "")
+        for row in rows
+        if isinstance(row, dict)
+    } - {""}
+
+    if repo == "kap":
+        module = importlib.import_module("kap.scrapers.disclosures")
+
+        def invoke() -> dict[str, Any]:
+            normalized = [module._normalize_raw_disclosure(row, "tr") for row in rows if isinstance(row, dict)]
+            return _result([str(item.disclosure_index) for item in normalized], expected=expected)
+
+        return Operation(invoke, implementation="typed Pydantic Disclosure per row")
+
+    if repo == "bist_agent":
+        module = importlib.import_module("bist_agent.ingestion.kap_web_scraper")
+
+        def invoke() -> dict[str, Any]:
+            normalized = [module.normalize_web_disclosure(row) for row in rows if isinstance(row, dict)]
+            return _result([str(item.get("disclosure_index") or "") for item in normalized], expected=expected)
+
+        return Operation(invoke, implementation="plain-dict normalization")
+
+    raise UnsupportedScenario("repository has no disclosure-feed normalization step")
 
 
 def _offline_registry(repo: str) -> Operation:

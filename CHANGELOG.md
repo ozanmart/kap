@@ -82,6 +82,14 @@
 - `kap statement` gained `--ticker`, since a report page does not always carry
   the stock code and the output otherwise read `UNKNOWN`.
 - `kap events` now prints the decayed impact score instead of `None`.
+- Added a composite **KAP Index** to the four-repository benchmark: one 0-1000
+  score per project weighted on correctness (35%), capability coverage (20%),
+  relative speed (20%), reliability (15%) and memory efficiency (10%). A row
+  that fails its correctness check is excluded from the speed and memory
+  comparisons, and speed is only compared within the same scenario and load.
+- Added `profile_replay` and `feed_normalize` benchmark scenarios so company-
+  profile parsing and disclosure-feed normalization are compared across
+  repositories on identical captured payloads.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser

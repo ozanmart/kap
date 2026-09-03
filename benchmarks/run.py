@@ -25,6 +25,8 @@ OFFLINE_SCENARIOS = [
     "warm_lookup",
     "cold_import",
     "listing_replay",
+    "profile_replay",
+    "feed_normalize",
     "offline_registry",
     "offline_exact_lookup",
     "warm_cache_exact_lookup",
