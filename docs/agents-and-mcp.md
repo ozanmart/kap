@@ -35,10 +35,10 @@ does not execute arbitrary Python or shell commands.
 
 ## MCP stdio
 
-Install the optional dependency and launch:
+The server implements the protocol's JSON-RPC framing directly, so no extra
+dependency is needed:
 
 ```bash
-python -m pip install "kap[mcp]"
 kap mcp
 ```
 

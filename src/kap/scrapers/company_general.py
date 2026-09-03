@@ -33,18 +33,30 @@ def _normalize_label(value: str | None) -> str:
     return "".join(char for char in folded if char.isalnum() and not unicodedata.combining(char))
 
 
-def _row_value(row: dict[str, str], *keys: str) -> str | None:
+def _normalize_row_value(value: Any) -> Any:
+    """Strip source-markup whitespace from text without flattening wrappers.
+
+    Values taken straight from an RSC payload still carry the markup's newlines
+    and non-breaking spaces. Non-text values stay untouched so their own
+    handlers (for example :func:`_currency_code`) can still unwrap them.
+    """
+    if isinstance(value, str):
+        return clean_text(value) or None
+    return value
+
+
+def _row_value(row: dict[str, Any], *keys: str) -> Any:
     """Read a table value using exact or normalized header aliases."""
     for key in keys:
         value = row.get(key)
         if value is not None:
-            return value
+            return _normalize_row_value(value)
 
     normalized = {_normalize_label(key): value for key, value in row.items()}
     for key in keys:
         value = normalized.get(_normalize_label(key))
         if value is not None:
-            return value
+            return _normalize_row_value(value)
     return None
 
 
@@ -245,7 +257,7 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
             "Ortağın Adı-Soyadı/Ticaret Ünvanı",
             "Ortağın Adı Soyadı / Ticaret Ünvanı",
             "shareholder",
-        ) or list(r.values())[0]
+        ) or _normalize_row_value(list(r.values())[0])
         if not title or _normalize_label(str(title)) in {"diğer", "diger", "toplam", "other", "total"}:
             continue
         nominal = normalize_numeric_value(
@@ -327,7 +339,7 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
         raw_sub = _rsc_table_rows(html, "bagli_ortakliklar", TITLE_SUBSIDIARIES)
     subsidiaries: list[Subsidiary] = []
     for r in raw_sub:
-        sub_title = _row_value(r, "Ticaret Ünvanı", "Şirket Ünvanı", "companyTitle") or list(r.values())[0]
+        sub_title = _row_value(r, "Ticaret Ünvanı", "Şirket Ünvanı", "companyTitle") or _normalize_row_value(list(r.values())[0])
         if not sub_title:
             continue
         act = _row_value(r, "Faaliyet Konusu", "scopeOfActivitiesOfCompany")

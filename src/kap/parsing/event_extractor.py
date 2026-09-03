@@ -236,7 +236,7 @@ def score_events(
     events: list[DerivedEvent],
     as_of: datetime | None = None,
 ) -> list[ScoredCompany]:
-    """Score and aggregate derived corporate events per company with half-life time decay."""
+    """Score and aggregate derived corporate events per company with exponential time decay."""
     now = as_of or datetime.now(timezone.utc)
     by_company: dict[str, dict[str, Any]] = {}
 
@@ -248,7 +248,9 @@ def score_events(
         dt = parse_kap_datetime(evt.publish_date)
         if dt is not None:
             age_days = max((now - dt).total_seconds() / 86400.0, 0.0)
-            decay = max(0.2, math.exp(-age_days / 30.0))  # 30 day half-life
+            # 30-day decay constant, not a half-life: a 30-day-old event keeps
+            # ~37% of its weight, and the floor stops old news reaching zero.
+            decay = max(0.2, math.exp(-age_days / 30.0))
 
         event_score = round(base_score * float(evt.confidence) * decay, 4)
         evt.score = event_score

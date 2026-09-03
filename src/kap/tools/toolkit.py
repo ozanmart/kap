@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
+from pydantic import BaseModel
+
 from ..client import KapClient
 from ..config import KapConfig
 from ..models.events import EventType

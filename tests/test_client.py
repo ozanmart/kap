@@ -350,11 +350,11 @@ def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
     assert selectors == [2024]
 
 
-def test_async_client_get_financials_fetches_candidates_concurrently(monkeypatch):
-    """When more than one FR disclosure matches the year/period filter (e.g. an
-    original filing plus a correction), the async client fetches every
-    candidate's statement concurrently instead of stopping at the first
-    success, then still returns the highest-index usable one."""
+def test_async_client_get_financials_falls_back_concurrently(monkeypatch):
+    """The highest-index filing satisfies almost every lookup, so it is fetched
+    alone. Only when it turns out to be unusable (e.g. an empty original filing
+    superseded by a correction) are the remaining candidates fetched, and those
+    go out concurrently rather than one sequential round trip at a time."""
     candidates = [
         Disclosure(
             disclosure_id="a",
@@ -512,3 +512,157 @@ def test_latest_ticker_query_uses_company_history_not_active_home_feed(monkeypat
         rows = client.get_latest_disclosures(limit=10, ticker="GARAN")
 
     assert rows == expected
+
+
+def test_async_client_get_company_general_info_raises_not_found_for_blank_profile(monkeypatch):
+    """The async client must reject KAP's empty genel-bilgiler template exactly
+    like the sync client instead of returning a blank profile."""
+    blank = CompanyGeneralInfo(member_oid="NOTATICKERXYZ")
+
+    async def run() -> None:
+        async with AsyncKapClient(KapConfig(enable_cache=False)) as client:
+            async def fetch(_oid: str) -> CompanyGeneralInfo:
+                return blank
+
+            monkeypatch.setattr(client.company_general, "aget_company_general_info", fetch)
+            with pytest.raises(KapNotFoundError):
+                await client.get_company_general_info("NOTATICKERXYZ")
+
+    asyncio.run(run())
+
+
+def test_async_client_event_extraction_honors_fr_type_from_disclosure_detail_alone():
+    """Async counterpart of the FR guard: a DisclosureDetail carrying
+    disclosure_type="FR" must not keyword-match the XBRL boilerplate."""
+    detail = DisclosureDetail(
+        disclosure_index=1643802,
+        disclosure_id="disc-fr",
+        title="Finansal Rapor",
+        content_text="Geri Alınmış Paylar (-) ... Treasury Shares (-) 19 -139 -139",
+        url="https://www.kap.org.tr/tr/Bildirim/1643802",
+        stock_code="KCHOL",
+        disclosure_type="FR",
+    )
+
+    async def run() -> list[str]:
+        async with AsyncKapClient(KapConfig(enable_cache=False)) as client:
+            events = await client.extract_events_many(disclosure_detail=detail)
+            return [event.event_type.value for event in events]
+
+    assert asyncio.run(run()) == ["FINANCIAL_REPORT"]
+
+
+def test_sync_and_async_clients_can_read_each_others_cache_entries(tmp_path):
+    """Both clients share one cache namespace and one cache directory, so a
+    value written by either must be readable by the other. Storing model
+    instances on one side and plain dicts on the other made the sync client
+    raise AttributeError on an entry the async client had written."""
+    config = KapConfig(cache_dir=tmp_path)
+    profile = CompanyGeneralInfo(member_oid="OID", company_title="ACME A.Ş.", ticker="ACME")
+
+    class Profiles:
+        def get_company_general_info(self, _oid: str) -> CompanyGeneralInfo:
+            return profile
+
+        async def aget_company_general_info(self, _oid: str) -> CompanyGeneralInfo:
+            return profile
+
+    class Listings:
+        def lookup_member_oid(self, _query: str) -> str:
+            return "OID"
+
+        async def alookup_member_oid(self, _query: str) -> str:
+            return "OID"
+
+        def lookup_ticker(self, _oid: str) -> str:
+            return "ACME"
+
+    async def write_with_async_client() -> None:
+        async with AsyncKapClient(config) as client:
+            client._components["company_general"] = Profiles()
+            client._components["listings"] = Listings()
+            written = await client.get_company_general_info("ACME")
+            assert written.company_title == "ACME A.Ş."
+
+    asyncio.run(write_with_async_client())
+
+    with KapClient(config) as client:
+        client._components["company_general"] = Profiles()
+        client._components["listings"] = Listings()
+        cached = client.get_company_general_info("ACME")
+
+    assert isinstance(cached, CompanyGeneralInfo)
+    assert cached.company_title == "ACME A.Ş."
+
+
+def test_async_client_get_financials_stops_after_the_first_usable_candidate(monkeypatch):
+    """A usable highest-index filing must not trigger fetches for the older
+    candidates behind it; those requests would be pure waste against KAP."""
+    candidates = [
+        Disclosure(disclosure_id="a", disclosure_index=902, title="2024 Yıllık Finansal Rapor", disclosure_type="FR"),
+        Disclosure(disclosure_id="b", disclosure_index=900, title="2024 Yıllık Finansal Rapor", disclosure_type="FR"),
+    ]
+    usable = FinancialStatement(
+        disclosure_index=902,
+        stock_code="THYAO",
+        period_labels=["31.12.2024"],
+        items=[
+            FinancialLineItem(
+                disclosure_index=902,
+                statement_role_code="210015",
+                statement_name="balance_sheet",
+                taxonomy_code="cash",
+                period_label="31.12.2024",
+                value_text="1",
+            )
+        ],
+    )
+    fetched: list[int] = []
+
+    async def fake_resolve(ticker):
+        return "oid"
+
+    async def fake_get_company_disclosures(**kwargs):
+        return candidates
+
+    async def fake_get_financial_statement(disclosure_index, **kwargs):
+        fetched.append(disclosure_index)
+        return usable
+
+    async def run():
+        async with AsyncKapClient(KapConfig(enable_cache=False)) as client:
+            monkeypatch.setattr(client, "_resolve_member_oid", fake_resolve)
+            monkeypatch.setattr(client.disclosures, "aget_company_disclosures", fake_get_company_disclosures)
+            monkeypatch.setattr(client.financials, "aget_financial_statement", fake_get_financial_statement)
+            return await client.get_financials("THYAO", 2024, "annual")
+
+    result = asyncio.run(run())
+
+    assert result.disclosure_index == 902
+    assert fetched == [902]
+
+
+def test_company_profile_values_are_stripped_of_source_markup_whitespace(monkeypatch):
+    """RSC payload values still carry the markup's newlines, which leaked into
+    model fields (a subsidiary title arrived as 'THY ... A.Ş.\\n')."""
+    import kap.scrapers.company_general as module
+
+    records = [
+        {
+            "item_key": "kpy41_acc7_bagli_ortakliklar",
+            "item_name": "Bağlı Ortaklıklar",
+            "value": [{
+                "companyTitle": "THY Uçuş Eğitim A.Ş.\n",
+                "scopeOfActivitiesOfCompany": "  Eğitim  ",
+                "monetaryUnit": {"key": "TRY"},
+                "ratioOfCapitalShareOfCompany": "100",
+            }],
+        },
+    ]
+    monkeypatch.setattr(module, "iter_rsc_items", lambda html: iter(records))
+    info = parse_company_general_html("<div companyname='X'></div>", "oid", "https://example.test")
+
+    assert info.subsidiaries[0].company_title == "THY Uçuş Eğitim A.Ş."
+    assert info.subsidiaries[0].activity_field == "Eğitim"
+    # A wrapper value must survive normalization so its own handler can unwrap it.
+    assert info.subsidiaries[0].currency == "TRY"

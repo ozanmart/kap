@@ -17,7 +17,7 @@ from benchmarks.core import OFFLINE_LOADS, render_markdown, summarize_latencies,
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOS = ["kap", "pykap", "kap_tr_sdk", "bist_agent"]
+REPOS = ["kap", "pykap", "kap_tr_sdk"]
 OFFLINE_SCENARIOS = [
     "package_import",
     "client_ready",
@@ -25,6 +25,8 @@ OFFLINE_SCENARIOS = [
     "warm_lookup",
     "cold_import",
     "listing_replay",
+    "profile_replay",
+    "feed_normalize",
     "offline_registry",
     "offline_exact_lookup",
     "warm_cache_exact_lookup",
@@ -37,15 +39,12 @@ REPO_REQUIRED_MODULES = {
     "kap": RUNTIME_REQUIRED_MODULES + ["diskcache"],
     "pykap": ["requests", "bs4", "html5lib", "pandas"],
     "kap_tr_sdk": ["requests", "pyppeteer", "pandas"],
-    "bist_agent": ["httpx", "requests", "tenacity", "bs4", "pydantic", "dotenv"],
 }
 BENCHMARK_EXTRA_DEPENDENCIES = [
     "html5lib>=1.1",
     "pandas>=2.0",
     "pyppeteer>=2.0",
-    "python-dotenv>=1.0",
     "requests>=2.0",
-    "tenacity>=8.0",
 ]
 
 
@@ -319,7 +318,7 @@ def aggregate_cold_imports(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Isolated four-repository KAP benchmark")
+    parser = argparse.ArgumentParser(description="Isolated three-repository KAP benchmark")
     parser.add_argument("--profile", choices=sorted(OFFLINE_LOADS), default="standard")
     parser.add_argument("--python", default="auto", help="One interpreter used by all repos (default: auto)")
     parser.add_argument("--live", action="store_true", help="Enable low-intensity public kap.org.tr tests")

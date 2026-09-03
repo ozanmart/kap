@@ -78,10 +78,10 @@ tools = toolkit.get_openai_tools()
 result = toolkit.execute_tool("kap_search_companies", {"query": "ASELS"})
 ```
 
-Start the stdio MCP server after installing the optional extra:
+Start the stdio MCP server; it speaks JSON-RPC over stdio with no extra
+dependency:
 
 ```bash
-python -m pip install "kap[mcp]"
 kap mcp
 ```
 
@@ -119,6 +119,52 @@ kap mcp
 
 `--json-out` is available on `today`, `detail`, `financials` and `taxonomy`.
 Use `kap --help` and [docs/cli.md](docs/cli.md) for the complete option matrix.
+
+## Benchmark
+
+`kap` is measured against the two other public Python projects that read the
+same KAP surfaces, `pykap` and `kap-tr-sdk`. Every repository/scenario/load
+combination runs in its own subprocess on one interpreter, deterministic
+scenarios replay identical captured payloads so nobody is scored on network
+luck, and each run's output is checked before its speed counts for anything.
+
+The run reduces to one **KAP Index** per project on a 0-1000 scale, where 1000
+means best-in-suite on every category simultaneously.
+
+| # | Project | KAP Index | Correctness | Coverage | Speed | Reliability | Memory |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | **kap (this package)** | **958** | 1.00 | 12/12 | 0.79 | 1.00 | 1.00 |
+| 2 | kap-tr-sdk | 620 | 0.50 | 4/12 | 0.83 | 1.00 | 0.63 |
+| 3 | pykap | 488 | 0.50 | 5/12 | 0.11 | 1.00 | 0.56 |
+
+<sub>`standard` profile, 132 measurements, loads of 1/5/10/25/50 operations,
+CPython 3.13, offline scenarios only. Reproduce with
+`python -m benchmarks.run --profile standard`; numbers move with hardware.</sub>
+
+What the index is built from, and why it is weighted this way:
+
+| Category | Weight | Definition |
+| --- | ---: | --- |
+| Correctness | 35% | Share of a project's own runs whose output passed its deterministic check. |
+| Capability coverage | 20% | Share of the suite's scenarios the project can perform at all. |
+| Relative speed | 20% | Per scenario and load, `fastest p50 / this p50`, averaged over contested groups. |
+| Reliability | 15% | `1 - (error rate + timeout rate)` over everything attempted. |
+| Memory efficiency | 10% | Per scenario and load, `lowest peak RSS / this peak RSS`, averaged over contested groups. |
+
+Three rules keep the number from flattering anyone. A row that fails its
+correctness check is excluded from the speed and memory comparisons, so being
+fast and wrong earns nothing. Speed is only ever compared within the same
+scenario and load. And a scenario only one project can perform is scored as
+coverage, never as an uncontested speed win — otherwise the same advantage
+would be counted twice.
+
+`kap` leads on correctness (37 of 37 verified rows, against 5 of 10 for both
+others) and on coverage: it is the only project that can run all twelve
+scenarios. It does not lead on raw speed — `kap-tr-sdk` scores 0.83 there
+against our 0.79, because it parses the replayed company listing faster than we
+do. Full methodology, the per-row table and the scoring rules live in
+[benchmarks/README.md](benchmarks/README.md); the scoring module is unit tested
+in `tests/test_benchmark_scoring.py`.
 
 ## Reliability and data semantics
 

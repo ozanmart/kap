@@ -106,7 +106,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", required=True, choices=["kap", "pykap", "kap_tr_sdk", "bist_agent"])
+    parser.add_argument("--repo", required=True, choices=["kap", "pykap", "kap_tr_sdk"])
     parser.add_argument("--repo-root")
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--iterations", type=int, default=1)

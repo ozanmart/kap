@@ -18,115 +18,43 @@ from ..constants import (
     PUBLICLY_TRADEABLE_INDEX_CODES,
 )
 from ..models.company import Company
-from ..models.market import Indice, Market, Sector, SubSector
+from ..models.market import Indice, Market, Sector
 from ..exceptions import KapDeadlineExceeded, KapValidationError
+from ..parsing.rsc import (
+    extract_json_objects as _extract_json_objects,
+    extract_next_payload_texts as _extract_next_payload_texts,
+    iter_nested_dicts as _iter_nested_dicts,
+)
 from .base import BaseScraper
 
 logger = logging.getLogger("kap.scrapers.listings")
 
 _TICKER_RE = re.compile(r"^[A-Z0-9]{2,6}$")
 
-
-def _extract_next_payload_texts(html: str) -> str:
-    """Extract raw Next.js server push JSON strings from HTML source."""
-    payloads: list[str] = []
-    marker = "self.__next_f.push(["
-    i = 0
-    while True:
-        start = html.find(marker, i)
-        if start < 0:
-            break
-
-        comma = html.find(",", start)
-        if comma < 0:
-            i = start + len(marker)
-            continue
-
-        quote = html.find('"', comma)
-        if quote < 0:
-            i = comma + 1
-            continue
-
-        j = quote + 1
-        escaped = False
-        chars: list[str] = []
-        while j < len(html):
-            ch = html[j]
-            if ch == '"' and not escaped:
-                break
-            if ch == "\\" and not escaped:
-                escaped = True
-            else:
-                escaped = False
-            chars.append(ch)
-            j += 1
-
-        raw = "".join(chars)
-        try:
-            decoded = json.loads(f'"{raw}"')
-        except Exception:
-            decoded = raw
-        payloads.append(decoded)
-        i = j + 1
-
-    return "\n".join(payloads)
+# ``str.upper``/``str.casefold`` are locale independent, so "Şişe".upper() is
+# "ŞIŞE" (dotless I) while the registry holds "ŞİŞE". Folding both the index and
+# the query through one table makes search case insensitive *and* lets a caller
+# type "sise cam" or "turk hava" without Turkish diacritics.
+_TR_FOLD = str.maketrans({
+    "İ": "i", "I": "i", "ı": "i", "Î": "i", "î": "i",
+    "Ş": "s", "ş": "s",
+    "Ğ": "g", "ğ": "g",
+    "Ü": "u", "ü": "u", "Û": "u", "û": "u",
+    "Ö": "o", "ö": "o",
+    "Ç": "c", "ç": "c",
+    "Â": "a", "â": "a",
+})
+_SEARCH_TOKEN_RE = re.compile(r"[^\W_]{2,}")
 
 
-def _extract_json_objects(text: str) -> list[dict[str, Any]]:
-    """Extract all individual JSON dictionary objects embedded within decoded text stream."""
-    decoder = json.JSONDecoder()
-    rows: list[dict[str, Any]] = []
-    i = 0
-    n = len(text)
-    seen: set[str] = set()
-
-    while i < n:
-        if text[i] != "{":
-            i += 1
-            continue
-        try:
-            obj, end = decoder.raw_decode(text[i:])
-            if isinstance(obj, dict):
-                row_key = json.dumps(obj, ensure_ascii=False, sort_keys=True, default=str)
-                if row_key not in seen:
-                    seen.add(row_key)
-                    rows.append(obj)
-                i += max(1, end)
-                continue
-        except Exception:
-            pass
-        i += 1
-    return rows
+def _fold_tr(value: str) -> str:
+    """Fold Turkish case and diacritics for search index and query alike."""
+    return str(value or "").translate(_TR_FOLD).casefold()
 
 
-def _iter_nested_dicts(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Flatten dictionaries nested in a Next.js RSC payload.
-
-    KAP currently serializes listings below wrappers such as ``data``,
-    ``initialData`` and ``children``.  The wrapper itself is valid JSON, so a
-    parser that only scans the outermost object silently loses every listing
-    row.  Yielding all nested dictionaries keeps the individual listing
-    parsers independent from those presentation-layer wrappers.
-    """
-    flattened: list[dict[str, Any]] = []
-    seen_ids: set[int] = set()
-
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            value_id = id(value)
-            if value_id in seen_ids:
-                return
-            seen_ids.add(value_id)
-            flattened.append(value)
-            for child in value.values():
-                visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-
-    for value in values:
-        visit(value)
-    return flattened
+def _search_tokens(folded: str) -> list[str]:
+    """Split an already folded string into indexable search tokens."""
+    return _SEARCH_TOKEN_RE.findall(folded)
 
 
 def _split_ticker_codes(value: str) -> list[str]:
@@ -199,16 +127,16 @@ def _member_oid_index() -> dict[str, str]:
 
 @lru_cache(maxsize=1)
 def _search_indexes() -> tuple[dict[str, tuple[Company, ...]], dict[str, tuple[Company, ...]]]:
-    """Build prefix and token indexes once; avoid scanning the registry per query."""
+    """Build folded prefix and token indexes once; avoid scanning per query."""
     companies, _, _ = _bundled_index()
     prefixes: dict[str, list[Company]] = {}
     tokens: dict[str, list[Company]] = {}
     for company in companies:
-        ticker = company.ticker.upper()
+        ticker = _fold_tr(company.ticker)
         for end in range(1, len(ticker) + 1):
             prefixes.setdefault(ticker[:end], []).append(company)
-        for token in re.findall(r"[A-Z0-9ÇĞİÖŞÜ]{2,}", company.name.upper()):
-            tokens.setdefault(token.casefold(), []).append(company)
+        for token in _search_tokens(_fold_tr(company.name)):
+            tokens.setdefault(token, []).append(company)
     return (
         {key: tuple(value) for key, value in prefixes.items()},
         {key: tuple(value) for key, value in tokens.items()},
@@ -390,7 +318,7 @@ class ListingsScraper:
         seen_tickers: set[str] = set()
 
         profile_map: dict[str, dict[str, Any]] = {}
-        flat_rows = _iter_nested_dicts(rows)
+        flat_rows = list(_iter_nested_dicts(rows))
         for r in flat_rows:
             mkk = str(r.get("mkkMemberOid") or "").strip()
             if mkk and ("stockCode" in r or "permaLink" in r or "kapMemberTitle" in r or "title" in r):
@@ -541,9 +469,10 @@ class ListingsScraper:
         if exact_name:
             return list(exact_name)
         prefix_index, token_index = _search_indexes()
-        starts = list(prefix_index.get(q, ()))
+        folded = _fold_tr(normalized)
+        starts = list(prefix_index.get(folded, ()))
         starts_tickers = {c.ticker for c in starts}
-        query_tokens = [token.casefold() for token in re.findall(r"[A-Z0-9ÇĞİÖŞÜ]{2,}", q)]
+        query_tokens = _search_tokens(folded)
         if query_tokens:
             # Company is an unhashable Pydantic model, so intersect/membership
             # checks must key on the ticker rather than the model instance.
@@ -553,7 +482,7 @@ class ListingsScraper:
         else:
             # Arbitrary substring search is inherently O(n); keep it as a
             # compatibility fallback only for fragments that are not tokens.
-            name_match = [c for c in companies if q.casefold() in c.name.casefold() and c.ticker not in starts_tickers]
+            name_match = [c for c in companies if folded in _fold_tr(c.name) and c.ticker not in starts_tickers]
         return starts + name_match
 
     def lookup_member_oid(self, query: str) -> str | None:

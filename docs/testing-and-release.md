@@ -42,8 +42,11 @@ python -m benchmarks.run --profile smoke --live --live-iterations 1
 ```
 
 It reports package import, client readiness, first offline lookup, first live
-request and warm lookup separately. See [../benchmarks/README.md](../benchmarks/README.md)
-for methodology and interpretation.
+request and warm lookup separately, then reduces every measurement to one
+0-1000 `KAP Index` per repository weighted on correctness, capability coverage,
+relative speed, reliability and memory. See
+[../benchmarks/README.md](../benchmarks/README.md) for methodology, the category
+weights and the interpretation rules.
 
 ## Registry refresh
 

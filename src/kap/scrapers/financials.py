@@ -217,7 +217,7 @@ def parse_financial_statement_html(
 
 
 class FinancialsScraper:
-    """Extracts and parses financial statements via HTML disclosure tables and KAP XLS downloads."""
+    """Extracts and parses financial statements from KAP disclosure HTML tables."""
 
     def __init__(self, base_scraper: BaseScraper | None = None, config: KapConfig | None = None) -> None:
         self.config = config or KapConfig()

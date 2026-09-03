@@ -33,11 +33,6 @@ DEFAULT_ROOTS = {
     "kap": CURRENT_ROOT,
     "pykap": _external_repo("KAP_BENCHMARK_PYKAP_ROOT", "pykap-master", "pykap-master"),
     "kap_tr_sdk": _external_repo("KAP_BENCHMARK_KAP_TR_SDK_ROOT", "kap-tr-sdk-main", "kap-tr-sdk-main"),
-    "bist_agent": _external_repo(
-        "KAP_BENCHMARK_BIST_AGENT_ROOT",
-        "bist-investment-agent-main",
-        "bist-investment-agent-main",
-    ),
 }
 EXPECTED_REPLAY_TICKERS = {"ACSEL", "ADEL", "A1CAP", "ACP"}
 LIVE_REGISTRY_REFERENCE_TICKERS = {"THYAO", "BIMAS", "GARAN", "ACSEL", "A1CAP", "ACP"}
@@ -60,9 +55,7 @@ def configure_source_path(repo: str, root: Path | None = None) -> Path:
     # The current package is benchmarked as the installed wheel.  Inserting
     # `kap/src` here would reintroduce the iCloud-hosted editable tree and make
     # the benchmark measure filesystem hydration instead of the artifact.
-    if repo == "bist_agent":
-        sys.path.insert(0, str(selected / "src"))
-    elif repo != "kap":
+    if repo != "kap":
         sys.path.insert(0, str(selected))
     return selected
 
@@ -108,7 +101,6 @@ def import_target(repo: str) -> dict[str, Any]:
         "kap": "kap",
         "pykap": "pykap",
         "kap_tr_sdk": "kap_sdk.kap_client",
-        "bist_agent": "bist_agent.ingestion.kap_web_scraper",
     }
     module = importlib.import_module(targets[repo])
     return {"item_count": len(vars(module)), "digest": stable_digest(vars(module)), "correct": None}
@@ -119,7 +111,6 @@ def _package_import(repo: str) -> Operation:
         "kap": "kap",
         "pykap": "pykap",
         "kap_tr_sdk": "kap_sdk",
-        "bist_agent": "bist_agent",
     }
 
     def invoke() -> dict[str, Any]:
@@ -202,6 +193,10 @@ def build_operation(repo: str, scenario: str, fixture_path: Path) -> Operation:
         return _first_live_request(repo)
     if scenario == "listing_replay":
         return _listing_replay(repo, fixture_path)
+    if scenario == "profile_replay":
+        return _profile_replay(repo, fixture_path)
+    if scenario == "feed_normalize":
+        return _feed_normalize(repo, fixture_path)
     if scenario == "offline_registry":
         return _offline_registry(repo)
     if scenario == "offline_exact_lookup":
@@ -291,19 +286,72 @@ def _listing_replay(repo: str, fixture_path: Path) -> Operation:
 
         return Operation(invoke, loop.close, "pyppeteer browser parser (browser replayed)")
 
-    if repo == "bist_agent":
-        module = importlib.import_module("bist_agent.workflows.kap_web.listings")
+    raise UnsupportedScenario(repo)
+
+
+PROFILE_MEMBER_OID = "4028e4a140f2ed720140f376bebb01a7"
+PROFILE_SOURCE_URL = f"https://www.kap.org.tr/tr/sirket-bilgileri/genel/{PROFILE_MEMBER_OID}"
+
+
+def _profile_field_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Compare profile parsers on the scalar fields all of them claim to read."""
+    present = {name for name, value in values.items() if str(value or "").strip()}
+    return {
+        "item_count": len(present),
+        "digest": stable_digest(f"{name}={values[name]}" for name in sorted(present)),
+        "correct": PROFILE_REQUIRED_FIELDS.issubset(present),
+        "sample": sorted(present)[:5],
+    }
+
+
+PROFILE_REQUIRED_FIELDS = {"company_title", "sector", "market"}
+
+
+def _profile_replay(repo: str, fixture_path: Path) -> Operation:
+    """Parse a captured KAP company-profile page. No repository is given a
+    network call, so this isolates parser capability and cost."""
+    html = (fixture_path.parent / "kap_company_general_live.html").read_text(encoding="utf-8")
+
+    if repo == "kap":
+        module = importlib.import_module("kap.scrapers.company_general")
 
         def invoke() -> dict[str, Any]:
-            payload = module._extract_next_payload_texts(html)
-            rows = module._extract_json_objects(payload)
-            normalized = module._normalize_payload("bist_sirketler", rows)
-            tickers = [row.get("stockCode", "") for row in normalized.get("bist_companies", [])]
-            return _result(tickers, expected=EXPECTED_REPLAY_TICKERS)
+            info = module.parse_company_general_html(html, PROFILE_MEMBER_OID, PROFILE_SOURCE_URL)
+            return _profile_field_values({
+                "company_title": info.company_title,
+                "sector": info.sector,
+                "market": info.market,
+                "auditor": info.auditor,
+                "website": info.website,
+                "indices": info.indices,
+            })
 
-        return Operation(invoke, implementation="RSC extraction + workflow normalization")
+        return Operation(invoke, implementation="RSC scalar fields with scoped HTML fallback")
 
-    raise UnsupportedScenario(repo)
+    raise UnsupportedScenario("repository has no company-profile page parser")
+
+
+def _feed_normalize(repo: str, fixture_path: Path) -> Operation:
+    """Normalize a captured disclosure feed payload into the repository's own
+    row shape, which is the step every KAP client has to get right."""
+    payload = json.loads((fixture_path.parent / "kap_feed_live.json").read_text(encoding="utf-8"))
+    rows = payload if isinstance(payload, list) else payload.get("data", [])
+    expected = {
+        str((row.get("disclosureBasic") or row).get("disclosureIndex") or "")
+        for row in rows
+        if isinstance(row, dict)
+    } - {""}
+
+    if repo == "kap":
+        module = importlib.import_module("kap.scrapers.disclosures")
+
+        def invoke() -> dict[str, Any]:
+            normalized = [module._normalize_raw_disclosure(row, "tr") for row in rows if isinstance(row, dict)]
+            return _result([str(item.disclosure_index) for item in normalized], expected=expected)
+
+        return Operation(invoke, implementation="typed Pydantic Disclosure per row")
+
+    raise UnsupportedScenario("repository has no disclosure-feed normalization step")
 
 
 def _offline_registry(repo: str) -> Operation:
@@ -475,16 +523,6 @@ def _live_feed(repo: str) -> Operation:
             return _live_feed_result(ids)
 
         return Operation(invoke, client.close, "shared httpx.Client; one attempt; 10s request timeout")
-    if repo == "bist_agent":
-        module = importlib.import_module("bist_agent.ingestion.kap_web_scraper")
-        scraper = module.KapWebScraper(timeout_s=10.0)
-
-        def invoke() -> dict[str, Any]:
-            rows = scraper.fetch_main_disclosures()
-            ids = [str((row.get("disclosureBasic") or {}).get("disclosureIndex") or "") for row in rows]
-            return _live_feed_result(ids)
-
-        return Operation(invoke, implementation="new httpx.Client per call; tenacity retry policy")
     if repo == "kap_tr_sdk":
         module = importlib.import_module("kap_sdk.kap_client")
         client = module.KapClient()
@@ -522,20 +560,6 @@ def _live_registry(repo: str) -> Operation:
             return _live_registry_result([row.get("ticker", "") for row in rows])
 
         return Operation(invoke, implementation="requests + BeautifulSoup + regex; 30s request timeout")
-    if repo == "bist_agent":
-        scraper_module = importlib.import_module("bist_agent.ingestion.kap_web_scraper")
-        listing_module = importlib.import_module("bist_agent.workflows.kap_web.listings")
-        scraper = scraper_module.KapWebScraper(timeout_s=12.0)
-
-        def invoke() -> dict[str, Any]:
-            html = scraper.fetch_listing_page_html("/tr/bist-sirketler")
-            payload = listing_module._extract_next_payload_texts(html)
-            normalized = listing_module._normalize_payload(
-                "bist_sirketler", listing_module._extract_json_objects(payload)
-            )
-            return _live_registry_result([row.get("stockCode", "") for row in normalized.get("bist_companies", [])])
-
-        return Operation(invoke, implementation="new httpx.Client + RSC workflow parser")
     if repo == "kap_tr_sdk":
         module = importlib.import_module("kap_sdk.kap_client")
         client = module.KapClient()

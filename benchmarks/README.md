@@ -1,6 +1,12 @@
-# Four-repository KAP benchmark
+# Three-repository KAP benchmark
 
-This framework compares the current `kap` package with `pykap`, `kap-tr-sdk`, and the public KAP-web portion of `bist-investment-agent`. It never calls MKK or MKK REST endpoints.
+This framework compares the current `kap` package with the two other public Python projects that read the same KAP surfaces, `pykap` and `kap-tr-sdk`. It never calls MKK or MKK REST endpoints.
+
+Every run ends in a **scoreboard**: one 0-1000 `KAP Index` per repository, plus
+the five category subscores behind it. The index exists because the per-row
+table answers "how fast was this one call" and not "is this library a
+reasonable choice". See [Scoring](#scoring) for the weights and the rules that
+keep a fast-but-wrong parser from winning.
 
 The framework deliberately separates three things:
 
@@ -8,7 +14,7 @@ The framework deliberately separates three things:
 - deterministic offline, cache, and HTML-replay throughput under increasing load;
 - opt-in, low-intensity live `kap.org.tr` latency.
 
-Every repository/scenario/load combination runs in a fresh subprocess. The same Python interpreter is used for all four repositories, worker processes have hard deadlines, unsupported capabilities are recorded as `skipped`, and deterministic replay also verifies output correctness. A fast but incorrect parser is therefore visible as `Correct: no`.
+Every repository/scenario/load combination runs in a fresh subprocess. The same Python interpreter is used for all three repositories, worker processes have hard deadlines, unsupported capabilities are recorded as `skipped`, and deterministic replay also verifies output correctness. A fast but incorrect parser is therefore visible as `Correct: no`.
 
 Cold import is sampled with independent processes (3/5/10 runs for smoke/standard/stress) because a second import inside the same process would only measure Python's module cache.
 
@@ -27,12 +33,12 @@ Profiles:
 - `stress`: the standard levels plus 100 and 1,000 operations.
 
 The `auto` interpreter selector prefers the repository `.venv` and never resolves
-a virtualenv launcher to its base interpreter. It preflights all four repositories,
+a virtualenv launcher to its base interpreter. It preflights all three repositories,
 builds the current checkout into a fresh wheel, and installs that wheel into a
 disposable environment which inherits the selected interpreter's preflighted
 comparison dependencies. The current `kap` import still comes only from the newly
 build wheel. The harness installs the comparison-only packages (`requests`,
-`pandas`, `html5lib`, `pyppeteer`, `tenacity`, and `python-dotenv`) into that
+`pandas`, `html5lib`, and `pyppeteer`) into that
 disposable environment and runs preflight there. Comparison repositories with
 missing optional dependencies are reported
 as `skipped`. If every current-`kap` job is skipped, the benchmark exits non-zero.
@@ -48,15 +54,45 @@ Live public-KAP tests are disabled by default. They run serially and use a paren
 python -m benchmarks.run --profile smoke --live --live-iterations 1
 ```
 
-Use `--repo-root REPO=/new/path` to relocate a source repository. Valid keys are `kap`, `pykap`, `kap_tr_sdk`, and `bist_agent`.
+Use `--repo-root REPO=/new/path` to relocate a source repository. Valid keys are `kap`, `pykap`, and `kap_tr_sdk`.
 For repeatable local configuration without command-line overrides, set
-`KAP_BENCHMARK_PYKAP_ROOT`, `KAP_BENCHMARK_KAP_TR_SDK_ROOT`, and
-`KAP_BENCHMARK_BIST_AGENT_ROOT`. Reports keep only repository labels, never
-local absolute paths.
+`KAP_BENCHMARK_PYKAP_ROOT` and `KAP_BENCHMARK_KAP_TR_SDK_ROOT`. Reports keep
+only repository labels, never local absolute paths.
 
 Reports are written as timestamped JSON and Markdown under the ignored
 `benchmark-results/` directory. They are generated artifacts, not source files;
 keep only intentionally curated summaries in documentation or release notes.
+
+## Scoring
+
+`benchmarks/scoring.py` reduces the measured rows to one index per repository:
+
+| Category | Weight | Definition |
+| --- | ---: | --- |
+| Correctness | 35% | Share of the repository's own runs that passed their deterministic output check. |
+| Capability coverage | 20% | Share of the suite's scenarios the repository can perform at all. |
+| Relative speed | 20% | Per scenario and load, `fastest p50 / this p50`, averaged. |
+| Reliability | 15% | `1 - (error rate + timeout rate)` over everything it attempted. |
+| Memory efficiency | 10% | Per scenario and load, `lowest peak RSS / this peak RSS`, averaged. |
+
+Rules that keep the number honest:
+
+- A row that failed its correctness check is removed from the speed and memory
+  comparisons, so being fast and wrong earns nothing.
+- Speed and memory are compared only within the same scenario and load;
+  milliseconds from different scenarios are never averaged together.
+- Coverage is measured against the scenarios the benchmark actually attempted,
+  so adding a scenario nobody supports moves no score.
+- A repository that skips most of the suite gets a low coverage score and keeps
+  its speed average over only what it ran, so skipping the hard half cannot
+  produce a better index than completing all of it.
+
+The scenario list is a capability checklist for a KAP client, not a list of
+this package's features: registry loading, ticker lookup, HTML replay for
+listings and company profiles, feed normalization, caching, async HTTP, and the
+opt-in live calls. `benchmarks/scoring.py` is unit tested in
+`tests/test_benchmark_scoring.py`, including the cases where a wrong-but-fast or
+narrow-but-fast repository must not win.
 
 ## Interpretation rules
 
@@ -73,6 +109,17 @@ keep only intentionally curated summaries in documentation or release notes.
 - The current `live_registry` adapter also records `fetch_s`, `ttfb_s`,
   `download_s`, `parse_s`, and `total_s` in the result so a slow live call can
   be attributed to a concrete phase.
+## Deterministic replay scenarios
+
+Replay scenarios feed every repository the identical captured KAP payload, so
+they isolate parser capability and cost from network variance:
+
+- `listing_replay`: the company-list page;
+- `profile_replay`: a company general-information page, scored on the scalar
+  fields every profile parser claims to read;
+- `feed_normalize`: a disclosure-feed payload normalized into each
+  repository's own row shape.
+
 ## Startup scenarios
 
 The startup scenarios are intentionally separate:

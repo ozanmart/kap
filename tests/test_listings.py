@@ -143,3 +143,19 @@ def test_registry_deadline_includes_parse_phase(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(KapDeadlineExceeded, match="after parsing"):
         scraper.get_companies(online=True)
     assert scraper.last_registry_metrics["stage"] == "parse"
+
+
+def test_local_search_is_case_and_diacritic_insensitive_for_turkish_names() -> None:
+    """`str.upper()` is locale independent, so "Şişe".upper() yields "ŞIŞE"
+    (dotless I) while the registry holds "ŞİŞE". Index and query are folded
+    through one table, so a caller can also skip the diacritics entirely."""
+    scraper = ListingsScraper(config=KapConfig())
+
+    for query in ("Şişe", "şişe", "sise cam", "SISE CAM"):
+        assert [c.ticker for c in scraper._local_search(query)] == ["SISE"]
+
+    for query in ("TÜRK HAVA YOLLARI", "turk hava yollari", "Türk Hava Yolları"):
+        assert [c.ticker for c in scraper._local_search(query)] == ["THYAO"]
+
+    assert [c.ticker for c in scraper._local_search("koc holding")] == ["KCHOL"]
+    assert [c.ticker for c in scraper._local_search("thyao")] == ["THYAO"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 from datetime import datetime as dt_cls, timedelta
 import logging
@@ -21,8 +22,6 @@ from ..constants import (
     ENDPOINT_HISTORICAL_DISCLOSURES,
     ISTANBUL_TZ,
     MEMBER_TYPE_CODES,
-    SUBJECT_OID_ACTIVITY_REPORT,
-    SUBJECT_OID_FINANCIAL_REPORT,
     VALID_COMPANY_DISCLOSURE_TYPES,
 )
 from ..models.disclosure import Disclosure, DisclosureDetail, DisclosureSubject
@@ -124,7 +123,14 @@ def _historical_payload(
     subject_oid: str,
     member_type: str = DEFAULT_MEMBER_TYPE_CODE,
 ) -> dict[str, Any]:
-    """Mirror the current public KAP detailed-inquiry form payload."""
+    """Mirror the current public KAP detailed-inquiry form payload.
+
+    ``subject_oid`` is accepted for callers that still build a payload directly,
+    but the live endpoint answers any non-empty ``subjectList`` with zero rows
+    whatever OID it is given, so the scraper sends an empty list and narrows the
+    result by the ``subject`` each row carries instead. See
+    :meth:`DisclosuresScraper._filter_rows_by_subject`.
+    """
     return {
         "fromDate": str(from_date),
         "toDate": str(to_date),
@@ -444,6 +450,75 @@ class DisclosuresScraper:
     def __init__(self, base_scraper: BaseScraper | None = None, config: KapConfig | None = None) -> None:
         self.config = config or KapConfig()
         self.base = base_scraper or BaseScraper(self.config)
+        self._subject_names: dict[str, dict[str, str]] = {}
+
+    # ── Subject filtering ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _subject_key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9çğıöşü]+", "", str(value or "").casefold())
+
+    def _index_subject_names(self, disclosure_class: str, subjects: list[DisclosureSubject]) -> dict[str, str]:
+        index = {item.subject_oid: item.subject for item in subjects if item.subject_oid}
+        self._subject_names[disclosure_class.upper()] = index
+        return index
+
+    def _filter_rows_by_subject(
+        self,
+        rows: list[dict[str, Any]],
+        subject_name: str | None,
+    ) -> list[dict[str, Any]]:
+        """Keep the rows whose own subject matches the requested one.
+
+        KAP appends qualifiers to the subject it returns (``Sorumluluk Beyanı``
+        is reported as ``Sorumluluk Beyanı (Konsolide)``), so match on a prefix
+        of the normalized name rather than on equality.
+        """
+        if not subject_name:
+            return rows
+        wanted = self._subject_key(subject_name)
+        if not wanted:
+            return rows
+        kept: list[dict[str, Any]] = []
+        for row in rows:
+            basic = row.get("disclosureBasic") if isinstance(row.get("disclosureBasic"), dict) else row
+            if self._subject_key(basic.get("subject")).startswith(wanted):
+                kept.append(row)
+        return kept
+
+    def _resolve_subject_name(self, disclosure_class: str, subject_oid: str, index: dict[str, str]) -> str:
+        """Fail loudly instead of quietly widening a filter we cannot honor."""
+        name = index.get(subject_oid)
+        if name is None:
+            raise KapValidationError(
+                f"Unknown subject_oid '{subject_oid}' for disclosure class "
+                f"'{disclosure_class.upper()}'. Available: {sorted(index.values())}"
+            )
+        return name
+
+    def _subject_name_for_oid(self, disclosure_class: str, subject_oid: str | None) -> str | None:
+        """Resolve a subject OID to the subject name KAP reports on each row."""
+        if not subject_oid:
+            return None
+        index = self._subject_names.get(disclosure_class.upper())
+        if index is None:
+            index = self._index_subject_names(
+                disclosure_class,
+                self.get_disclosure_subjects(disclosure_class=disclosure_class),
+            )
+        return self._resolve_subject_name(disclosure_class, subject_oid, index)
+
+    async def _asubject_name_for_oid(self, disclosure_class: str, subject_oid: str | None) -> str | None:
+        """Async counterpart of :meth:`_subject_name_for_oid`."""
+        if not subject_oid:
+            return None
+        index = self._subject_names.get(disclosure_class.upper())
+        if index is None:
+            index = self._index_subject_names(
+                disclosure_class,
+                await self.aget_disclosure_subjects(disclosure_class=disclosure_class),
+            )
+        return self._resolve_subject_name(disclosure_class, subject_oid, index)
 
     # ── Main Feed ────────────────────────────────────────────────────────────
 
@@ -656,25 +731,28 @@ class DisclosuresScraper:
         from_date: datetime.date | None = None,
         to_date: datetime.date | None = None,
         disclosure_class: str = "FR",
-        subject_oid: str = SUBJECT_OID_FINANCIAL_REPORT,
+        subject_oid: str | None = None,
     ) -> list[Disclosure]:
         """Query historical disclosures via criteria POST endpoint."""
         from_d = from_date or (dt_cls.today().date() - timedelta(days=365))
         to_d = to_date or dt_cls.today().date()
 
         route = ENDPOINT_HISTORICAL_DISCLOSURES.format(lang=self.config.lang)
+        subject_name = self._subject_name_for_oid(disclosure_class, subject_oid)
         results: list[Disclosure] = []
         for start, end in _historical_date_windows(from_d, to_d):
             resp = self.base.request_sync(
                 "POST",
                 route,
-                json=_historical_payload(member_oid, start, end, disclosure_class, subject_oid),
+                json=_historical_payload(member_oid, start, end, disclosure_class, ""),
             )
             rows = self.base.run_with_deadline_sync(
                 lambda resp=resp: [
                     _normalize_raw_disclosure(x, self.config.lang)
-                    for x in _require_list_payload(resp.json(), endpoint="historical disclosures")
-                    if isinstance(x, dict)
+                    for x in self._filter_rows_by_subject(
+                        [x for x in _require_list_payload(resp.json(), endpoint="historical disclosures") if isinstance(x, dict)],
+                        subject_name,
+                    )
                 ],
                 deadline_at=self.base.operation_deadline(),
             )
@@ -687,28 +765,41 @@ class DisclosuresScraper:
         from_date: datetime.date | None = None,
         to_date: datetime.date | None = None,
         disclosure_class: str = "FR",
-        subject_oid: str = SUBJECT_OID_FINANCIAL_REPORT,
+        subject_oid: str | None = None,
     ) -> list[Disclosure]:
         """Async query historical disclosures via criteria POST endpoint."""
         from_d = from_date or (dt_cls.today().date() - timedelta(days=365))
         to_d = to_date or dt_cls.today().date()
 
         route = ENDPOINT_HISTORICAL_DISCLOSURES.format(lang=self.config.lang)
-        results: list[Disclosure] = []
-        for start, end in _historical_date_windows(from_d, to_d):
+
+        subject_name = await self._asubject_name_for_oid(disclosure_class, subject_oid)
+
+        async def fetch_window(start: datetime.date, end: datetime.date) -> list[Disclosure]:
             resp = await self.base.request_async(
                 "POST",
                 route,
-                json=_historical_payload(member_oid, start, end, disclosure_class, subject_oid),
+                json=_historical_payload(member_oid, start, end, disclosure_class, ""),
             )
-            rows = await self.base.run_with_deadline_async(
-                lambda resp=resp: [
+            return await self.base.run_with_deadline_async(
+                lambda: [
                     _normalize_raw_disclosure(x, self.config.lang)
-                    for x in _require_list_payload(resp.json(), endpoint="historical disclosures")
-                    if isinstance(x, dict)
+                    for x in self._filter_rows_by_subject(
+                        [x for x in _require_list_payload(resp.json(), endpoint="historical disclosures") if isinstance(x, dict)],
+                        subject_name,
+                    )
                 ],
                 deadline_at=self.base.operation_deadline(),
             )
+
+        # KAP only accepts one-year windows, so a decade-long query is ten
+        # requests. Run them concurrently under the shared max_concurrency
+        # semaphore instead of paying ten sequential round trips; gather
+        # preserves window order, so deduplication still keeps the earliest
+        # window's payload for a disclosure that appears in two windows.
+        windows = _historical_date_windows(from_d, to_d)
+        results: list[Disclosure] = []
+        for rows in await asyncio.gather(*(fetch_window(start, end) for start, end in windows)):
             results.extend(rows)
         return sorted(_dedupe_disclosures(results), key=lambda item: item.disclosure_index, reverse=True)
 

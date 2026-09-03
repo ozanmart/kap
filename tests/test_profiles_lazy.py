@@ -1,16 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 import threading
 import time
 import inspect
+from pathlib import Path
 
 from kap.cache import CacheManager
 from kap.config import KapConfig
 from kap.client import KapClient
 from kap.async_client import AsyncKapClient
+
+SOURCE_ROOT = str(Path(__file__).resolve().parent.parent / "src")
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Point a child interpreter at this checkout instead of an installed copy.
+
+    ``pytest``'s ``pythonpath`` setting only applies in-process, so without this
+    a subprocess silently exercises whatever ``kap`` happens to be installed in
+    the active environment.
+    """
+    return {**os.environ, "PYTHONPATH": SOURCE_ROOT}
 
 
 def test_agent_profiles_have_explicit_retry_and_deadline_contracts() -> None:
@@ -96,12 +110,11 @@ assert cache.cached_call('item', refresh, expire=60) == 'old'
 cache.close()
 """
     started = time.monotonic()
-    subprocess.check_call([sys.executable, "-c", code])
+    subprocess.check_call([sys.executable, "-c", code], env=_subprocess_env())
     assert time.monotonic() - started < 1.0
 
 
 def test_importing_kap_and_constructing_client_stays_on_lightweight_path() -> None:
-    source_root = str(__file__).replace("/tests/test_profiles_lazy.py", "") + "/src"
     code = (
         "import sys; import kap; from kap.client import KapClient; from kap.async_client import AsyncKapClient; "
         "c=KapClient(); a=AsyncKapClient(); "
@@ -110,7 +123,7 @@ def test_importing_kap_and_constructing_client_stays_on_lightweight_path() -> No
     output = subprocess.check_output(
         [sys.executable, "-c", code],
         text=True,
-        env={**__import__("os").environ, "PYTHONPATH": source_root},
+        env=_subprocess_env(),
     ).strip()
     assert output == "[]"
 

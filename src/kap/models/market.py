@@ -27,7 +27,14 @@ class Sector(BaseModel):
     sector_no: str | None = Field(default=None, description="Sector identification number")
     sector_oid: str | None = Field(default=None, description="KAP sector OID")
     main_sector_name: str | None = Field(default=None, description="Parent main sector name")
-    sub_sectors: list[SubSector] = Field(default_factory=list, description="List of subordinate sub-sectors")
+    sub_sectors: list[SubSector] = Field(
+        default_factory=list,
+        description=(
+            "Subordinate sub-sectors. KAP's public taxonomy page exposes a single "
+            "sector level whose parent is `main_sector_name`, so this stays empty "
+            "unless a caller builds a deeper hierarchy itself."
+        ),
+    )
     companies: list[str] = Field(default_factory=list, description="Directly mapped stock tickers")
 
 

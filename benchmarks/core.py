@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from benchmarks.scoring import render_methodology, render_scoreboard, score_results
+
 
 REPO_LABELS = {
     "kap": "kap (current)",
     "pykap": "pykap",
     "kap_tr_sdk": "kap-tr-sdk",
-    "bist_agent": "bist-investment-agent (KAP web only)",
 }
 
 SCENARIO_LABELS = {
@@ -29,6 +30,8 @@ SCENARIO_LABELS = {
     "offline_exact_lookup": "Exact ticker lookup (offline)",
     "warm_cache_exact_lookup": "Exact ticker lookup (warm cache)",
     "async_http_soak": "Async HTTP client soak (local server)",
+    "profile_replay": "Company-profile HTML replay",
+    "feed_normalize": "Disclosure-feed normalization replay",
     "live_feed": "Live public disclosure feed",
     "live_registry": "Live public company registry",
 }
@@ -98,17 +101,27 @@ def render_markdown(report: dict[str, Any]) -> str:
     meta = report["meta"]
     rows = report["results"]
     lines = [
-        "# KAP four-repository benchmark",
+        "# KAP three-repository benchmark",
         "",
         f"Generated: `{meta['generated_at_utc']}`<br>",
         f"Interpreter: `{meta['python_executable']}` ({meta['python_version']})<br>",
         f"Profile: `{meta['profile']}`; live: `{str(meta['live']).lower()}`",
         "",
+        "## Scoreboard",
+        "",
+    ]
+    lines.extend(render_scoreboard(score_results(rows), REPO_LABELS))
+    lines.extend(["", "<details>", "<summary>How the KAP Index is computed</summary>", ""])
+    lines.extend(render_methodology())
+    lines.extend([
+        "",
+        "</details>",
+        "",
         "## Results",
         "",
         "| Repository | Scenario | Load | Status | min | p50 | p95 | p99 | max | mean | σ ms | ops/s | err % | timeout % | RSS MB | Items | Correct |",
         "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
-    ]
+    ])
     for row in rows:
         lines.append(
             "| {repo} | {scenario} | {load} | {status} | {min} | {p50} | {p95} | {p99} | {max} | {mean} | {stddev} | {ops} | {error_rate} | {timeout_rate} | {rss} | {items} | {correct} |".format(
@@ -173,6 +186,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def write_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    report.setdefault("scores", [item.to_dict() for item in score_results(report["results"])])
     stamp = report["meta"]["run_id"]
     json_path = output_dir / f"benchmark-{stamp}.json"
     md_path = output_dir / f"benchmark-{stamp}.md"

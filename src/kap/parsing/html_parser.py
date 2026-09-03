@@ -36,8 +36,8 @@ def clean_text(value: str | None) -> str:
     return " ".join(str(value or "").replace("\xa0", " ").split())
 
 
-def normalize_numeric_value(value: str | None) -> float | int | None:
-    """Convert Turkish/European formatted numbers (e.g. '1.234.567,89' or '(1.000)') into float/int."""
+def _normalized_number_text(value: str | None) -> str | None:
+    """Reduce a Turkish/European formatted number to a plain decimal string."""
     text = clean_text(value)
     if not text or text in {"-", "--", "null", "None"}:
         return None
@@ -74,22 +74,34 @@ def normalize_numeric_value(value: str | None) -> float | int | None:
 
     if negative and not text.startswith("-"):
         text = f"-{text}"
+    return text
 
+
+def normalize_numeric_value(value: str | None) -> float | int | None:
+    """Convert Turkish/European formatted numbers (e.g. '1.234.567,89' or '(1.000)') into float/int."""
+    text = _normalized_number_text(value)
+    if text is None:
+        return None
     try:
         if "." in text:
             return float(text)
         return int(text)
-    except Exception:
+    except ValueError:
         return None
 
 
 def normalize_decimal_value(value: str | None) -> Decimal | None:
-    """Parse a Turkish/European number without introducing binary float error."""
-    normalized = normalize_numeric_value(value)
-    if normalized is None:
+    """Parse a Turkish/European number without introducing binary float error.
+
+    The value is built straight from the normalized text. Routing it through
+    ``float`` first would lose precision on the large magnitudes that appear in
+    full-unit TRY financial statements.
+    """
+    text = _normalized_number_text(value)
+    if text is None:
         return None
     try:
-        return Decimal(str(normalized))
+        return Decimal(text)
     except (InvalidOperation, ValueError):
         return None
 
