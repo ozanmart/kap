@@ -87,6 +87,35 @@ Rules that keep the number honest:
   its speed average over only what it ran, so skipping the hard half cannot
   produce a better index than completing all of it.
 
+### Fairness rules
+
+A comparison is only worth reading if nobody is set up to fail:
+
+- Every repository is measured on the input its documented approach actually
+  consumes. KAP renders the company listing client-side, so an HTTP fetch
+  returns only the RSC payload while a browser also exposes `#financialTable`
+  (846 rows, verified against the live page on 2026-09-03). A parser that reads
+  that table finds nothing in a captured server response — but it was handed
+  the wrong input, so it is recorded as `skipped` with that reason, never as
+  incorrect. The browser dependency still counts against it in coverage, which
+  is where a runtime requirement belongs.
+- Shared fixtures hold the same data for everyone. The warm-cache scenario once
+  seeded one repository with 2 companies and another with 800, which reported a
+  fixture artifact as a speed result; both now hold the bundled registry.
+- A scenario is only skipped when the repository genuinely lacks the
+  capability, not when an adapter was never written for it. Every skip reason
+  in the report names the missing capability.
+- Measured field sets are the common denominator. The profile scenario scores
+  the five scalars every participating parser documents, so a repository that
+  models the company title elsewhere is not failed for a modelling choice.
+
+### Known limitation
+
+The replay scenarios cannot supply a browser-rendered DOM, so browser-based
+parsers are skipped there rather than compared. Capturing a rendered snapshot
+as a checked-in fixture would let them be measured directly; until then their
+parse cost is simply absent from the speed comparison.
+
 The scenario list is a capability checklist for a KAP client, not a list of
 this package's features: registry loading, ticker lookup, HTML replay for
 listings and company profiles, feed normalization, caching, async HTTP, and the

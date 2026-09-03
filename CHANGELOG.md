@@ -103,6 +103,15 @@
 - Fixed the `warm_cache_exact_lookup` benchmark seeding one repository's cache
   with 2 companies and the other's with 800, so a fixture artifact was being
   reported as a speed result.
+- Audited the benchmark for fairness and corrected four ways it favored this
+  package: scenarios a comparison repository could perform were marked
+  unsupported because no adapter had been written (client construction, offline
+  and warm lookups, feed normalization); cold import let this package's lazy
+  client escape a cost the others paid eagerly; browser-based parsers were
+  recorded as *incorrect* for finding nothing in a captured server response,
+  which is not the input they consume; and the profile scenario required a
+  field one repository models elsewhere. Correcting these moved `kap-tr-sdk`
+  from 484 to 748.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser
