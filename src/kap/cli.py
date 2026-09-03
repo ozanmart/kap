@@ -17,6 +17,10 @@ class _KapCLIGroup(click.Group):
     def invoke(self, ctx: click.Context):
         try:
             return super().invoke(ctx)
+        except click.exceptions.Exit:
+            # Click uses Exit(0) for --help. Preserve the successful exit code
+            # instead of rendering it as a generic CLI error.
+            raise
         except click.ClickException:
             raise
         except Exception as exc:

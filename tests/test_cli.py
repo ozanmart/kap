@@ -73,3 +73,10 @@ def test_cli_rejects_invalid_disclosure_index_before_network() -> None:
 
     assert result.exit_code == 2
     assert "0 is not in the range" in result.output
+
+
+def test_cli_subcommand_help_exits_successfully() -> None:
+    result = CliRunner().invoke(main, ["detail", "--help"])
+
+    assert result.exit_code == 0
+    assert "Read a disclosure's normalized metadata" in result.output
