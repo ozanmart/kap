@@ -94,6 +94,15 @@
   repositories on identical captured payloads.
 - Narrowed the benchmark to the two other public KAP projects, `pykap` and
   `kap-tr-sdk`.
+- Fixed a warm-cache hit rebuilding every model on every call. Storing
+  dictionaries is what lets the sync and async clients share a cache, but the
+  800-row company registry then cost ~0.80 ms to reconstruct against 0.003 ms to
+  read. Hydrated models are now reused while the cached payload is unchanged,
+  taking a warm `get_companies()` from 0.798 ms to 0.009 ms; callers still
+  receive a fresh list.
+- Fixed the `warm_cache_exact_lookup` benchmark seeding one repository's cache
+  with 2 companies and the other's with 800, so a fixture artifact was being
+  reported as a speed result.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser

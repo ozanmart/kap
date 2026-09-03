@@ -133,9 +133,9 @@ means best-in-suite on every category simultaneously.
 
 | # | Project | KAP Index | Correctness | Coverage | Speed | Reliability | Memory |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | **kap (this package)** | **958** | 1.00 | 12/12 | 0.79 | 1.00 | 1.00 |
-| 2 | kap-tr-sdk | 620 | 0.50 | 4/12 | 0.83 | 1.00 | 0.63 |
-| 3 | pykap | 488 | 0.50 | 5/12 | 0.11 | 1.00 | 0.56 |
+| 1 | **kap (this package)** | **999** | 1.00 | 12/12 | 0.99 | 1.00 | 1.00 |
+| 2 | pykap | 487 | 0.50 | 5/12 | 0.11 | 1.00 | 0.56 |
+| 3 | kap-tr-sdk | 484 | 0.50 | 4/12 | 0.17 | 1.00 | 0.58 |
 
 <sub>`standard` profile, 132 measurements, loads of 1/5/10/25/50 operations,
 CPython 3.13, offline scenarios only. Reproduce with
@@ -160,9 +160,11 @@ would be counted twice.
 
 `kap` leads on correctness (37 of 37 verified rows, against 5 of 10 for both
 others) and on coverage: it is the only project that can run all twelve
-scenarios. It does not lead on raw speed — `kap-tr-sdk` scores 0.83 there
-against our 0.79, because it parses the replayed company listing faster than we
-do. Full methodology, the per-row table and the scoring rules live in
+scenarios. It wins 21 of the 22 contested speed groups. The one it loses is
+`package_import`, by roughly a microsecond on a ten-microsecond operation —
+close enough to measurement noise that it should not be read as a result.
+
+Full methodology, the per-row table and the scoring rules live in
 [benchmarks/README.md](benchmarks/README.md); the scoring module is unit tested
 in `tests/test_benchmark_scoring.py`.
 

@@ -394,6 +394,26 @@ def _offline_exact_lookup(repo: str) -> Operation:
     raise UnsupportedScenario("repository has no public offline exact-ticker lookup")
 
 
+def _warm_cache_registry_rows() -> list[dict[str, Any]]:
+    """Build the shared warm-cache fixture in kap-tr-sdk's own row shape.
+
+    Both repositories must hold the same number of companies for the warm-hit
+    comparison to mean anything. The rows come from the bundled snapshot, which
+    is a data file rather than any repository's measured code path.
+    """
+    listings = importlib.import_module("kap.scrapers.listings")
+    return [
+        {
+            "path": company.ticker.lower(),
+            "name": company.name,
+            "code": company.ticker,
+            "city": company.city or "",
+            "independent_audit_firm": company.auditor or "",
+        }
+        for company in listings.get_bundled_companies()
+    ]
+
+
 def _warm_cache_exact_lookup(repo: str) -> Operation:
     if repo == "kap":
         kap = importlib.import_module("kap")
@@ -421,13 +441,11 @@ def _warm_cache_exact_lookup(repo: str) -> Operation:
     temp_dir = tempfile.TemporaryDirectory(prefix="kap-bench-")
     module._CACHE_DIR = temp_dir.name
     client = module.KapClient()
-    client.cache.set(
-        "companies",
-        [
-            {"path": "thy", "name": "TÜRK HAVA YOLLARI A.O.", "code": "THYAO", "city": "İSTANBUL", "independent_audit_firm": ""},
-            {"path": "bim", "name": "BİM BİRLEŞİK MAĞAZALAR A.Ş.", "code": "BIMAS", "city": "İSTANBUL", "independent_audit_firm": ""},
-        ],
-    )
+    # Seed the full registry, not a two-row stub. Scanning 2 entries against
+    # another repository's 800 is not the same operation, and the difference
+    # would be reported as a speed result rather than as the fixture artifact
+    # it is.
+    client.cache.set("companies", _warm_cache_registry_rows())
     loop = asyncio.new_event_loop()
 
     def invoke() -> dict[str, Any]:

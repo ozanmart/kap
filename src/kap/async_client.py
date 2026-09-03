@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from ._components import create_component
 from .cache import CacheManager
 from .client import (
+    _Hydrator,
     _cache_key,
     _dump,
     _dump_all,
@@ -57,6 +58,7 @@ class AsyncKapClient:
             stale_while_revalidate=self.config.stale_while_revalidate,
         )
         self._components: dict[str, Any] = {}
+        self._hydrator = _Hydrator()
         self._db_path = db_path
         self._db: Any = None
         self.last_request_metrics: dict[str, Any] = {}
@@ -206,7 +208,7 @@ class AsyncKapClient:
             refresh_async=refresh_async,
             enforce_deadline=online,
         )
-        companies = _load_all(Company, raw)
+        companies = self._hydrator.many(key, Company, raw)
         if self.last_request_metrics.get("operation") != "registry":
             self._capture_metrics()
         if self.db and companies:
@@ -258,7 +260,7 @@ class AsyncKapClient:
             force_refresh=force_refresh,
         )
         self._capture_metrics()
-        info = _load(CompanyGeneralInfo, raw)
+        info = self._hydrator.one(key, CompanyGeneralInfo, raw)
         if not info.company_title:
             raise KapNotFoundError(f"No company profile found for '{ticker_or_oid}'")
         if not info.ticker:
@@ -282,7 +284,7 @@ class AsyncKapClient:
             key, fetch, expire=self.config.cache_expiry_indices, force_refresh=force_refresh
         )
         self._capture_metrics()
-        return _load_all(Indice, raw)
+        return self._hydrator.many(key, Indice, raw)
 
     async def get_sectors(self, force_refresh: bool = False) -> list[Sector]:
         """Async get all sectors."""
@@ -296,7 +298,7 @@ class AsyncKapClient:
             key, fetch, expire=self.config.cache_expiry_sectors, force_refresh=force_refresh
         )
         self._capture_metrics()
-        return _load_all(Sector, raw)
+        return self._hydrator.many(key, Sector, raw)
 
     async def get_markets(self, force_refresh: bool = False) -> list[Market]:
         """Async get all market segments."""
@@ -310,7 +312,7 @@ class AsyncKapClient:
             key, fetch, expire=self.config.cache_expiry_markets, force_refresh=force_refresh
         )
         self._capture_metrics()
-        return _load_all(Market, raw)
+        return self._hydrator.many(key, Market, raw)
 
     # ── Disclosures ──────────────────────────────────────────────────────────
 
