@@ -44,7 +44,7 @@ def test_markdown_exposes_incorrect_results_and_skip_reason() -> None:
                 "warning": "fixture parser returned no rows",
             },
             {
-                "repo": "bist_agent",
+                "repo": "kap_tr_sdk",
                 "scenario": "offline_registry",
                 "iterations": 1,
                 "status": "skipped",

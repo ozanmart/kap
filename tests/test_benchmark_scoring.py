@@ -30,9 +30,14 @@ def test_category_weights_sum_to_one() -> None:
 
 
 def test_a_repository_best_at_everything_scores_the_maximum() -> None:
-    results = [_row("kap", "listing_replay"), _row("kap", "offline_registry")]
+    results = [
+        _row("kap", "listing_replay", p50_ms=1.0, peak_rss_mb=10.0),
+        _row("kap", "offline_registry", p50_ms=1.0, peak_rss_mb=10.0),
+        _row("pykap", "listing_replay", p50_ms=100.0, peak_rss_mb=100.0),
+        _row("pykap", "offline_registry", p50_ms=100.0, peak_rss_mb=100.0),
+    ]
 
-    (score,) = score_results(results)
+    (score,) = [item for item in score_results(results) if item.repo == "kap"]
 
     assert score.index == MAX_INDEX
     assert all(value == 1.0 for value in score.categories.values())
@@ -61,6 +66,8 @@ def test_an_incorrect_row_cannot_earn_speed_points() -> None:
 
     kap, pykap = sorted(score_results(results), key=lambda item: item.repo)
 
+    # Entering the contest and answering wrong still counts as entering it, so
+    # the correct repository keeps the win it actually earned.
     assert kap.categories["speed"] == 1.0
     assert pykap.categories["speed"] == 0.0
     assert pykap.categories["correctness"] == 0.0
@@ -134,3 +141,22 @@ def test_scoreboard_renders_a_ranked_table_and_names_missing_scenarios() -> None
 def test_empty_results_do_not_raise() -> None:
     assert score_results([]) == []
     assert render_scoreboard([], {}) == ["_No results to score._"]
+
+
+def test_an_uncontested_scenario_does_not_award_free_speed_points() -> None:
+    """A scenario only one repository can run is a capability difference, and
+    coverage already prices it in. Scoring it as a speed win too would count the
+    same advantage twice, and `best / own value` is always 1.0 when you are the
+    only runner."""
+    contested = [
+        _row("kap", "listing_replay", p50_ms=20.0),
+        _row("pykap", "listing_replay", p50_ms=10.0),
+    ]
+    with_solo = contested + [_row("kap", "feed_normalize", p50_ms=5.0)]
+
+    (kap_before,) = [s for s in score_results(contested) if s.repo == "kap"]
+    (kap_after,) = [s for s in score_results(with_solo) if s.repo == "kap"]
+
+    assert kap_before.categories["speed"] == 0.5
+    assert kap_after.categories["speed"] == 0.5  # unchanged by the solo scenario
+    assert kap_after.categories["coverage"] == 1.0  # but coverage still rewards it

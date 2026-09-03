@@ -1,4 +1,4 @@
-"""Composite scoring for the four-repository KAP benchmark.
+"""Composite scoring for the three-repository KAP benchmark.
 
 The per-row table answers "how fast was this one call". It does not answer the
 question a reader actually has, which is whether a library is a reasonable
@@ -22,6 +22,10 @@ Design rules that keep the number honest:
 * Coverage is measured against the scenarios the benchmark actually attempted,
   so adding a scenario no repository supports changes nobody's score, and a
   repository is never penalized for a category it was not asked to run.
+* Speed and memory are scored only where at least two repositories competed.
+  A scenario only one repository can perform is a capability difference, and
+  coverage already prices that in; letting it also win an uncontested speed
+  comparison would count the same advantage twice.
 * A repository that skips a scenario scores nothing for it in coverage, but its
   speed and memory averages are taken only over what it did run. Skipping the
   hard half of the suite therefore cannot inflate the remaining averages into a
@@ -102,18 +106,34 @@ def _relative_scores(
 
     Lower is better for every metric here (latency, resident memory), so the
     score is ``best / observed`` and lands in ``(0, 1]``.
+
+    A group counts only when at least two repositories produced a measurable
+    row for it. A scenario only one repository can perform is a capability
+    difference, already priced into the coverage category; scoring it here as
+    well would hand that repository a free 1.0 for a race it ran alone.
+
+    Entering a contest and returning the wrong answer still counts as entering
+    it, so a repository that beat a disqualified rival keeps its win. Only
+    correct rows are eligible to be scored or to set the best value.
     """
-    groups: dict[tuple[str, Any], dict[str, float]] = {}
+    entrants: dict[tuple[str, Any], set[str]] = {}
+    scorable: dict[tuple[str, Any], dict[str, float]] = {}
     for row in rows:
-        if not _is_usable(row):
+        if row.get("status") != "ok":
             continue
         value = _positive(row.get(metric))
         if value is None:
             continue
-        groups.setdefault(_group_key(row), {})[str(row.get("repo"))] = value
+        key = _group_key(row)
+        repo = str(row.get("repo"))
+        entrants.setdefault(key, set()).add(repo)
+        if _is_usable(row):
+            scorable.setdefault(key, {})[repo] = value
 
     per_repo: dict[str, list[float]] = {}
-    for observations in groups.values():
+    for key, observations in scorable.items():
+        if len(entrants.get(key, set())) < 2:
+            continue
         best = min(observations.values())
         for repo, value in observations.items():
             per_repo.setdefault(repo, []).append(best / value)
@@ -215,11 +235,11 @@ def render_methodology() -> list[str]:
         f"| Capability coverage | {CATEGORY_WEIGHTS['coverage']:.0%} | Share of the suite's scenarios the repository "
         "can perform at all. A scenario it cannot do is not an average it gets to skip. |",
         f"| Relative speed | {CATEGORY_WEIGHTS['speed']:.0%} | Per scenario and load, `fastest p50 / this p50`, "
-        "averaged. Milliseconds are never compared across different scenarios. |",
+        "averaged over the groups where at least two repositories competed. |",
         f"| Reliability | {CATEGORY_WEIGHTS['reliability']:.0%} | `1 - (error rate + timeout rate)` over everything "
         "the repository attempted. |",
         f"| Memory efficiency | {CATEGORY_WEIGHTS['efficiency']:.0%} | Per scenario and load, "
-        "`lowest peak RSS / this peak RSS`, averaged. |",
+        "`lowest peak RSS / this peak RSS`, averaged over contested groups. |",
         "",
         "A row whose output failed its correctness check is dropped from the speed and memory "
         "comparisons, so a fast but wrong parser cannot earn points for being fast.",

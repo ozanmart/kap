@@ -16,7 +16,6 @@ REPO_LABELS = {
     "kap": "kap (current)",
     "pykap": "pykap",
     "kap_tr_sdk": "kap-tr-sdk",
-    "bist_agent": "bist-investment-agent (KAP web only)",
 }
 
 SCENARIO_LABELS = {
@@ -102,7 +101,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     meta = report["meta"]
     rows = report["results"]
     lines = [
-        "# KAP four-repository benchmark",
+        "# KAP three-repository benchmark",
         "",
         f"Generated: `{meta['generated_at_utc']}`<br>",
         f"Interpreter: `{meta['python_executable']}` ({meta['python_version']})<br>",

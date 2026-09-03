@@ -1,6 +1,6 @@
-# Four-repository KAP benchmark
+# Three-repository KAP benchmark
 
-This framework compares the current `kap` package with `pykap`, `kap-tr-sdk`, and the public KAP-web portion of `bist-investment-agent`. It never calls MKK or MKK REST endpoints.
+This framework compares the current `kap` package with the two other public Python projects that read the same KAP surfaces, `pykap` and `kap-tr-sdk`. It never calls MKK or MKK REST endpoints.
 
 Every run ends in a **scoreboard**: one 0-1000 `KAP Index` per repository, plus
 the five category subscores behind it. The index exists because the per-row
@@ -14,7 +14,7 @@ The framework deliberately separates three things:
 - deterministic offline, cache, and HTML-replay throughput under increasing load;
 - opt-in, low-intensity live `kap.org.tr` latency.
 
-Every repository/scenario/load combination runs in a fresh subprocess. The same Python interpreter is used for all four repositories, worker processes have hard deadlines, unsupported capabilities are recorded as `skipped`, and deterministic replay also verifies output correctness. A fast but incorrect parser is therefore visible as `Correct: no`.
+Every repository/scenario/load combination runs in a fresh subprocess. The same Python interpreter is used for all three repositories, worker processes have hard deadlines, unsupported capabilities are recorded as `skipped`, and deterministic replay also verifies output correctness. A fast but incorrect parser is therefore visible as `Correct: no`.
 
 Cold import is sampled with independent processes (3/5/10 runs for smoke/standard/stress) because a second import inside the same process would only measure Python's module cache.
 
@@ -33,12 +33,12 @@ Profiles:
 - `stress`: the standard levels plus 100 and 1,000 operations.
 
 The `auto` interpreter selector prefers the repository `.venv` and never resolves
-a virtualenv launcher to its base interpreter. It preflights all four repositories,
+a virtualenv launcher to its base interpreter. It preflights all three repositories,
 builds the current checkout into a fresh wheel, and installs that wheel into a
 disposable environment which inherits the selected interpreter's preflighted
 comparison dependencies. The current `kap` import still comes only from the newly
 build wheel. The harness installs the comparison-only packages (`requests`,
-`pandas`, `html5lib`, `pyppeteer`, `tenacity`, and `python-dotenv`) into that
+`pandas`, `html5lib`, and `pyppeteer`) into that
 disposable environment and runs preflight there. Comparison repositories with
 missing optional dependencies are reported
 as `skipped`. If every current-`kap` job is skipped, the benchmark exits non-zero.
@@ -54,11 +54,10 @@ Live public-KAP tests are disabled by default. They run serially and use a paren
 python -m benchmarks.run --profile smoke --live --live-iterations 1
 ```
 
-Use `--repo-root REPO=/new/path` to relocate a source repository. Valid keys are `kap`, `pykap`, `kap_tr_sdk`, and `bist_agent`.
+Use `--repo-root REPO=/new/path` to relocate a source repository. Valid keys are `kap`, `pykap`, and `kap_tr_sdk`.
 For repeatable local configuration without command-line overrides, set
-`KAP_BENCHMARK_PYKAP_ROOT`, `KAP_BENCHMARK_KAP_TR_SDK_ROOT`, and
-`KAP_BENCHMARK_BIST_AGENT_ROOT`. Reports keep only repository labels, never
-local absolute paths.
+`KAP_BENCHMARK_PYKAP_ROOT` and `KAP_BENCHMARK_KAP_TR_SDK_ROOT`. Reports keep
+only repository labels, never local absolute paths.
 
 Reports are written as timestamped JSON and Markdown under the ignored
 `benchmark-results/` directory. They are generated artifacts, not source files;
