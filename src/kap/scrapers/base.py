@@ -249,6 +249,7 @@ class BaseScraper:
                 timeout=timeout,
                 headers=DEFAULT_HEADERS,
                 follow_redirects=True,
+                http2=True,
             )
         return self._sync_client
 
@@ -266,6 +267,7 @@ class BaseScraper:
                 timeout=timeout,
                 headers=DEFAULT_HEADERS,
                 follow_redirects=True,
+                http2=True,
             )
         return self._async_client
 

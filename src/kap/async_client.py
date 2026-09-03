@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import re
 import time
@@ -648,9 +649,11 @@ class AsyncKapClient:
         if not matching:
             wanted = f"{year}{f'/{period}' if period else ''}"
             raise KapNotFoundError(f"No financial report found for {ticker.upper()} ({wanted})")
-        failures: list[str] = []
-        for selected in sorted(matching, key=lambda item: item.disclosure_index, reverse=True):
-            async def fetch_statement(selected=selected) -> dict[str, Any]:
+
+        from .models.financials import FinancialStatement
+
+        async def fetch_one(selected: Disclosure) -> FinancialStatement:
+            async def fetch_statement() -> dict[str, Any]:
                 result = await self.financials.aget_financial_statement(
                     selected.disclosure_index,
                     stock_code=ticker.upper(),
@@ -658,7 +661,6 @@ class AsyncKapClient:
                 )
                 return result.model_dump()
 
-            from .models.financials import FinancialStatement
             raw_statement = await self._cached_async(
                 self._cache_key(
                     "financial-statement",
@@ -670,7 +672,22 @@ class AsyncKapClient:
                 expire=self.config.cache_expiry_financials,
                 force_refresh=force_refresh,
             )
-            statement = FinancialStatement(**raw_statement) if isinstance(raw_statement, dict) else raw_statement
+            return FinancialStatement(**raw_statement) if isinstance(raw_statement, dict) else raw_statement
+
+        # Usually one candidate survives the year/period filter, so this is a
+        # single fetch. When more than one does (e.g. a corrected/duplicate
+        # filing), fetch every candidate's statement concurrently instead of
+        # one sequential round trip at a time, then keep the first success in
+        # the same highest-disclosure-index-first preference order as before.
+        ordered = sorted(matching, key=lambda item: item.disclosure_index, reverse=True)
+        results = await asyncio.gather(*(fetch_one(item) for item in ordered), return_exceptions=True)
+
+        failures: list[str] = []
+        for selected, outcome in zip(ordered, results):
+            if isinstance(outcome, BaseException):
+                failures.append(f"#{selected.disclosure_index}: {type(outcome).__name__}: {outcome}")
+                continue
+            statement = outcome
             if statement.items and any(str(year) in label for label in statement.period_labels):
                 if self.db:
                     self.db.save_financial_statement(statement)

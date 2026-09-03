@@ -30,9 +30,16 @@ Every profile has bounded per-attempt timeouts and an overall
 ## Timeouts and concurrency
 
 The timeout fields are `timeout_s`, `connect_timeout_s`, `read_timeout_s`,
-`write_timeout_s` and `pool_timeout_s`. `max_concurrency` limits simultaneous
-async HTTP requests. Keep the deadline larger than the expected connect/read
-budget when overriding profile defaults.
+`write_timeout_s` and `pool_timeout_s`. `max_concurrency` (default `8`) bounds
+simultaneous async HTTP requests via an internal semaphore. Keep the deadline
+larger than the expected connect/read budget when overriding profile defaults.
+
+KAP is a free public service with no API key and no published rate limit.
+`max_concurrency` is the SDK's only built-in politeness control; both HTTP
+clients also reuse one pooled connection (HTTP/1.1, upgrading to HTTP/2 when
+the origin offers it) instead of opening one per request. Raise
+`max_concurrency` only for jobs that genuinely need the throughput, and prefer
+caching (below) over repeated live requests for anything read more than once.
 
 ## Cache semantics
 

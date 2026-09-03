@@ -148,6 +148,15 @@ def test_client_search():
         assert any(c.ticker == "THYAO" for c in results)
 
 
+def test_client_search_multi_word_name_query_does_not_crash():
+    """A multi-token name query (the documented example) used to raise
+    ``TypeError: unhashable type: 'Company'`` because the token-intersection
+    path built sets of Company model instances instead of tickers."""
+    with KapClient() as client:
+        results = client.search_companies("Hava Yolları")
+        assert any(c.ticker == "THYAO" for c in results)
+
+
 def test_sqlite_storage():
     db = KapDatabase(":memory:")
     comp = Company(
@@ -339,6 +348,66 @@ def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
     assert result.disclosure_index == 901
     assert result.stock_code == "THYAO"
     assert selectors == [2024]
+
+
+def test_async_client_get_financials_fetches_candidates_concurrently(monkeypatch):
+    """When more than one FR disclosure matches the year/period filter (e.g. an
+    original filing plus a correction), the async client fetches every
+    candidate's statement concurrently instead of stopping at the first
+    success, then still returns the highest-index usable one."""
+    candidates = [
+        Disclosure(
+            disclosure_id="a",
+            disclosure_index=902,
+            title="2024 Yıllık Finansal Rapor",
+            disclosure_type="FR",
+        ),
+        Disclosure(
+            disclosure_id="b",
+            disclosure_index=900,
+            title="2024 Yıllık Finansal Rapor (Düzeltme)",
+            disclosure_type="FR",
+        ),
+    ]
+    empty_statement = FinancialStatement(disclosure_index=902, stock_code="THYAO", period_labels=[])
+    good_statement = FinancialStatement(
+        disclosure_index=900,
+        stock_code="THYAO",
+        period_labels=["31.12.2024"],
+        items=[
+            FinancialLineItem(
+                disclosure_index=900,
+                statement_role_code="210015",
+                statement_name="balance_sheet",
+                taxonomy_code="cash",
+                period_label="31.12.2024",
+                value_text="1",
+            )
+        ],
+    )
+    fetched: list[int] = []
+
+    async def fake_resolve(ticker):
+        return "oid"
+
+    async def fake_get_company_disclosures(**kwargs):
+        return candidates
+
+    async def fake_get_financial_statement(disclosure_index, **kwargs):
+        fetched.append(disclosure_index)
+        return empty_statement if disclosure_index == 902 else good_statement
+
+    async def run():
+        async with AsyncKapClient(KapConfig(enable_cache=False)) as client:
+            monkeypatch.setattr(client, "_resolve_member_oid", fake_resolve)
+            monkeypatch.setattr(client.disclosures, "aget_company_disclosures", fake_get_company_disclosures)
+            monkeypatch.setattr(client.financials, "aget_financial_statement", fake_get_financial_statement)
+            return await client.get_financials("THYAO", 2024, "annual")
+
+    result = asyncio.run(run())
+
+    assert result.disclosure_index == 900
+    assert sorted(fetched) == [900, 902]
 
 
 def test_client_get_financials_rejects_responsibility_statement_from_publish_year(monkeypatch):
