@@ -92,18 +92,33 @@ See [docs/agents-and-mcp.md](docs/agents-and-mcp.md) for Claude Desktop configur
 The `kap` command exposes the same operations for scripts and shell workflows:
 
 ```bash
+kap --help
+kap --version
 kap search THYAO
+kap search THYAO --online
 kap info BIMAS
 kap today
+kap today --member-type bist_sirketleri --json-out
+kap latest --limit 20 --ticker GARAN
 kap disclosures KCHOL --type FR --days 180
+kap disclosures KCHOL --type FR --days 180 --limit 20
 kap detail 1657514 --max-chars 4000
-kap financials THYAO --year 2025 --period 12A
+kap detail 1657514 --max-chars 4000 --json-out
+kap financials THYAO --year 2025 --period annual
+kap financials THYAO --year 2025 --period annual --json-out
+kap statement 1657514
 kap calendar --days 90
+kap calendar --days 90 --ticker THYAO
 kap taxonomy indices
+kap taxonomy indices --json-out
+kap taxonomy sectors
+kap taxonomy markets
+kap events 1657514
 kap mcp
 ```
 
-Use `kap --help` and [docs/cli.md](docs/cli.md) for all commands, filters and JSON output.
+`--json-out` is available on `today`, `detail`, `financials` and `taxonomy`.
+Use `kap --help` and [docs/cli.md](docs/cli.md) for the complete option matrix.
 
 ## Reliability and data semantics
 

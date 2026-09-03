@@ -95,7 +95,7 @@ with KapClient() as client:
 
 ```python
 with KapClient() as client:
-    report = client.get_financials("THYAO", year=2025, period="12A")
+    report = client.get_financials("THYAO", year=2025, period="annual")
     statement = client.get_financial_statement(report.disclosure_index)
 ```
 
