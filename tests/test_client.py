@@ -9,7 +9,8 @@ from kap.async_client import AsyncKapClient
 from kap.client import KapClient
 from kap.config import KapConfig
 from kap.storage.sqlite import KapDatabase
-from kap.models.company import Company
+from kap.exceptions import KapNotFoundError
+from kap.models.company import Company, CompanyGeneralInfo
 from kap.models.disclosure import Disclosure
 from kap.models.disclosure import DisclosureDetail
 from kap.models.financials import FinancialLineItem, FinancialStatement
@@ -257,6 +258,37 @@ def test_client_event_extraction_recovers_ticker_for_inline_body(monkeypatch):
     assert len(events) == 2
     assert {event.event_type.value for event in events} == {"DIVIDEND", "BOARD_DECISION"}
     assert all(event.company_key == "THYAO" for event in events)
+
+
+def test_client_get_company_general_info_raises_not_found_for_blank_profile(monkeypatch):
+    """An unknown ticker resolves to a raw identifier that KAP's genel-bilgiler
+    page renders as an empty template (200 OK, no data). This must surface as
+    KapNotFoundError instead of a silently blank profile."""
+    blank = CompanyGeneralInfo(member_oid="NOTATICKERXYZ")
+    with KapClient(KapConfig(enable_cache=False)) as client:
+        monkeypatch.setattr(client.company_general, "get_company_general_info", lambda oid: blank)
+        with pytest.raises(KapNotFoundError):
+            client.get_company_general_info("NOTATICKERXYZ")
+
+
+def test_client_event_extraction_honors_fr_type_from_disclosure_detail_alone():
+    """A caller who only has a DisclosureDetail (e.g. the CLI's `events`
+    command) must still hit the FR guard instead of keyword-matching the raw
+    XBRL dump, which contains boilerplate like "Geri Alınmış Paylar" that
+    otherwise false-positives as a BUYBACK event."""
+    detail = DisclosureDetail(
+        disclosure_index=1643802,
+        disclosure_id="disc-fr",
+        title="Finansal Rapor",
+        content_text="Geri Alınmış Paylar (-) ... Treasury Shares (-) 19 -139 -139",
+        url="https://www.kap.org.tr/tr/Bildirim/1643802",
+        stock_code="KCHOL",
+        disclosure_type="FR",
+    )
+    with KapClient(KapConfig(enable_cache=False)) as client:
+        event = client.extract_events(disclosure_detail=detail)
+
+    assert event.event_type.value == "FINANCIAL_REPORT"
 
 
 def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
