@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+import sys
 
 from benchmarks.core import percentile, render_markdown, runtime_meta, stable_digest, summarize_latencies
 from benchmarks.adapters import LIVE_REGISTRY_MIN_TICKERS, _live_registry_result, _warm_cache_exact_lookup
@@ -78,8 +78,19 @@ def test_cold_imports_are_aggregated_across_processes() -> None:
     assert aggregate["peak_rss_mb"] == 40.0
 
 
-def test_explicit_virtualenv_interpreter_path_is_not_resolved() -> None:
-    interpreter = str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python")
+def test_explicit_virtualenv_interpreter_path_is_not_resolved(tmp_path) -> None:
+    # GitHub Actions uses setup-python directly and does not create the
+    # developer-only repository .venv. Build the same launcher shape locally so
+    # this regression test is independent of a machine-specific checkout.
+    launcher = tmp_path / "venv" / "bin" / "python"
+    launcher.parent.mkdir(parents=True)
+    try:
+        launcher.symlink_to(sys.executable)
+        interpreter = str(launcher)
+    except OSError:
+        # Symlink creation can be disabled on some platforms; an existing
+        # interpreter still verifies that select_python preserves its path.
+        interpreter = sys.executable
     assert select_python(interpreter) == interpreter
 
 

@@ -247,7 +247,7 @@ def test_client_event_extraction_recovers_ticker_for_inline_body(monkeypatch):
         url="https://www.kap.org.tr/tr/Bildirim/1234",
         stock_code="THYAO",
     )
-    with KapClient() as client:
+    with KapClient(KapConfig(enable_cache=False)) as client:
         monkeypatch.setattr(client.disclosures, "get_disclosure_detail", lambda index: detail)
         events = client.extract_events_many(
             disclosure_index=1234,
@@ -290,7 +290,7 @@ def test_client_get_financials_selects_report_by_year_and_period(monkeypatch):
             )
         ],
     )
-    with KapClient() as client:
+    with KapClient(KapConfig(enable_cache=False)) as client:
         monkeypatch.setattr(client, "_resolve_member_oid", lambda ticker: "oid")
         monkeypatch.setattr(
             client.disclosures,
@@ -343,7 +343,7 @@ def test_client_get_financials_rejects_responsibility_statement_from_publish_yea
         ],
     )
     selected: list[int] = []
-    with KapClient() as client:
+    with KapClient(KapConfig(enable_cache=False)) as client:
         monkeypatch.setattr(client, "_resolve_member_oid", lambda ticker: "oid")
         monkeypatch.setattr(
             client.disclosures,
@@ -385,7 +385,7 @@ def test_financial_period_matches_live_donem_code_for_annual_report(monkeypatch)
             )
         ],
     )
-    with KapClient() as client:
+    with KapClient(KapConfig(enable_cache=False)) as client:
         monkeypatch.setattr(client, "_resolve_member_oid", lambda ticker: "oid")
         monkeypatch.setattr(client.disclosures, "get_company_disclosures", lambda **kwargs: [candidate])
         monkeypatch.setattr(client.financials, "get_financial_statement", lambda *args, **kwargs: statement)
@@ -396,7 +396,7 @@ def test_financial_period_matches_live_donem_code_for_annual_report(monkeypatch)
 
 def test_latest_ticker_query_uses_company_history_not_active_home_feed(monkeypatch):
     expected = [Disclosure(disclosure_index=42, stock_code="GARAN", title="Latest")]
-    with KapClient() as client:
+    with KapClient(KapConfig(enable_cache=False)) as client:
         monkeypatch.setattr(client, "_resolve_member_oid", lambda ticker: "oid")
         monkeypatch.setattr(
             client.disclosures,
