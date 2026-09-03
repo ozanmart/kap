@@ -471,7 +471,11 @@ class AsyncKapClient:
         self._begin_operation("historical_disclosures")
         validate_date_range(from_date, to_date)
         oid = await self._resolve_member_oid(ticker_or_oid)
-        effective_subject_oid = subject_oid or SUBJECT_OID_FINANCIAL_REPORT
+        # The financial-report subject only exists inside the FR class; applying
+        # it to another class would reject every row.
+        effective_subject_oid = subject_oid or (
+            SUBJECT_OID_FINANCIAL_REPORT if disclosure_class.upper() == "FR" else None
+        )
         key = self._cache_key(
             "historical-disclosures",
             oid=oid,

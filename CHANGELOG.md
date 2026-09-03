@@ -57,6 +57,18 @@
 - Corrected the event-scoring comment: `exp(-age/30)` is a 30-day decay
   constant, not a half-life.
 - Removed `tests/run_all.py`, a hand-rolled runner duplicating pytest.
+- Fixed `get_historical_disclosures` returning zero rows for every caller. The
+  detailed-inquiry endpoint answers any non-empty `subjectList` with an empty
+  result whatever subject OID it is given, and the client sent the
+  financial-report subject by default. The query now goes out unfiltered and
+  the subject is matched against the one each row reports, allowing for the
+  qualifier KAP appends (`Sorumluluk Beyanı` arrives as
+  `Sorumluluk Beyanı (Konsolide)`). An unresolvable `subject_oid` now raises
+  `KapValidationError` listing the valid subjects instead of silently widening
+  the query, and the financial-report default only applies inside the `FR`
+  class.
+- Removed `SUBJECT_OID_ACTIVITY_REPORT`, which was unused and matched no
+  subject in any live disclosure class.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser

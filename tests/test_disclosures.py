@@ -130,6 +130,7 @@ def test_historical_query_uses_current_form_payload_and_bounded_windows() -> Non
     assert payload["memberType"] == "IGS"
     assert payload["marketOid"] == ""
     assert payload["subjectList"] == ["subject"]
+    assert _historical_payload("member", windows[0][0], windows[0][1], "FR", "")["subjectList"] == []
 
 
 def test_historical_flat_payload_is_normalized_using_current_kap_fields() -> None:
@@ -198,3 +199,84 @@ def test_async_historical_windows_are_fetched_concurrently() -> None:
     assert [row.disclosure_index for row in rows] == sorted(
         (row.disclosure_index for row in rows), reverse=True
     )
+
+
+def _subject_probe_base(captured: list[dict]) -> object:
+    class SubjectBase:
+        def request_sync(self, method, path, **kwargs):
+            captured.append(kwargs["json"])
+            return SimpleNamespace(json=lambda: [
+                {"disclosureIndex": 3, "subject": "Finansal Rapor", "disclosureClass": "FR"},
+                {"disclosureIndex": 2, "subject": "Sorumluluk Beyanı (Konsolide)", "disclosureClass": "FR"},
+                {"disclosureIndex": 1, "subject": "Faaliyet Raporu (Konsolide)", "disclosureClass": "FR"},
+            ])
+
+        def operation_deadline(self):
+            return None
+
+        def run_with_deadline_sync(self, func, *, deadline_at):
+            return func()
+
+    return SubjectBase()
+
+
+def test_historical_subject_filter_is_applied_to_rows_not_to_the_payload(monkeypatch) -> None:
+    """KAP answers any non-empty subjectList with zero rows whatever OID it is
+    given, so the query must stay unfiltered on the wire and narrow the result
+    by the subject each row reports. The qualifier KAP appends to a subject
+    ("... (Konsolide)") means the match has to be a prefix, not equality."""
+    from kap.models.disclosure import DisclosureSubject
+
+    captured: list[dict] = []
+    scraper = DisclosuresScraper(base_scraper=_subject_probe_base(captured))
+    monkeypatch.setattr(
+        scraper,
+        "get_disclosure_subjects",
+        lambda disclosure_class="FR": [
+            DisclosureSubject(disclosure_class="FR", subject="Finansal Rapor", subject_oid="fr-oid"),
+            DisclosureSubject(disclosure_class="FR", subject="Sorumluluk Beyanı", subject_oid="sb-oid"),
+        ],
+    )
+
+    rows = scraper.get_historical_disclosures_by_criteria(
+        member_oid="oid",
+        from_date=datetime.date(2025, 1, 1),
+        to_date=datetime.date(2025, 6, 1),
+        subject_oid="fr-oid",
+    )
+
+    assert captured[0]["subjectList"] == []
+    assert [row.disclosure_index for row in rows] == [3]
+
+    consolidated = scraper.get_historical_disclosures_by_criteria(
+        member_oid="oid",
+        from_date=datetime.date(2025, 1, 1),
+        to_date=datetime.date(2025, 6, 1),
+        subject_oid="sb-oid",
+    )
+    assert [row.disclosure_index for row in consolidated] == [2]
+
+
+def test_historical_unknown_subject_oid_is_rejected(monkeypatch) -> None:
+    """Silently ignoring a filter the caller asked for would hand back every
+    row as if it had matched."""
+    import pytest
+    from kap.exceptions import KapValidationError
+    from kap.models.disclosure import DisclosureSubject
+
+    scraper = DisclosuresScraper(base_scraper=_subject_probe_base([]))
+    monkeypatch.setattr(
+        scraper,
+        "get_disclosure_subjects",
+        lambda disclosure_class="FR": [
+            DisclosureSubject(disclosure_class="FR", subject="Finansal Rapor", subject_oid="fr-oid"),
+        ],
+    )
+
+    with pytest.raises(KapValidationError, match="Unknown subject_oid"):
+        scraper.get_historical_disclosures_by_criteria(
+            member_oid="oid",
+            from_date=datetime.date(2025, 1, 1),
+            to_date=datetime.date(2025, 6, 1),
+            subject_oid="nope",
+        )
