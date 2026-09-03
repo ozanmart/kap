@@ -54,6 +54,8 @@ class DisclosureDetail(BaseModel):
     stock_code: str | None = Field(default=None, description="Stock ticker code")
     company_title: str | None = Field(default=None, description="Company title")
     publish_date: str | None = Field(default=None, description="Publish date")
+    disclosure_type: str | None = Field(default=None, description="Disclosure type code shown by KAP")
+    disclosure_class: str | None = Field(default=None, description="Normalized disclosure class code")
     attachment_urls: list[str] = Field(default_factory=list, description="URLs to attached PDF or XLSX files")
     attachment_metadata: list[dict[str, Any]] = Field(default_factory=list, description="Structured attachment metadata from KAP")
     raw: dict[str, Any] = Field(default_factory=dict, description="Normalized metadata recovered from KAP")

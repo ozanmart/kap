@@ -35,10 +35,18 @@ COLD_PROCESS_RUNS = {"smoke": 3, "standard": 5, "stress": 10}
 RUNTIME_REQUIRED_MODULES = ["httpx", "pydantic", "bs4", "lxml"]
 REPO_REQUIRED_MODULES = {
     "kap": RUNTIME_REQUIRED_MODULES + ["diskcache"],
-    "pykap": ["requests", "bs4", "pandas"],
+    "pykap": ["requests", "bs4", "html5lib", "pandas"],
     "kap_tr_sdk": ["requests", "pyppeteer", "pandas"],
     "bist_agent": ["httpx", "requests", "tenacity", "bs4", "pydantic", "dotenv"],
 }
+BENCHMARK_EXTRA_DEPENDENCIES = [
+    "html5lib>=1.1",
+    "pandas>=2.0",
+    "pyppeteer>=2.0",
+    "python-dotenv>=1.0",
+    "requests>=2.0",
+    "tenacity>=8.0",
+]
 
 
 def _candidate_pythons() -> list[str]:
@@ -117,7 +125,7 @@ def build_current_wheel(base_python: str, workspace: Path) -> Path:
     commands = [
         [base_python, "-m", "build", "--wheel", "--no-isolation", "--outdir", str(dist_dir)]
     ]
-    uv = shutil.which("uv") or "/Users/omerozanmart/.local/bin/uv"
+    uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
     if Path(uv).exists():
         commands.append([uv, "build", "--wheel", "--out-dir", str(dist_dir)])
     errors: list[str] = []
@@ -135,14 +143,33 @@ def build_current_wheel(base_python: str, workspace: Path) -> Path:
 
 
 def prepare_isolated_environment(base_python: str, wheel: Path, workspace: Path) -> str:
-    """Create a disposable venv and install the freshly built wheel with runtime deps."""
+    """Create a disposable venv and install the freshly built wheel.
+
+    System site packages are visible so the three comparison repositories use
+    the exact same preflighted dependency set as the selected interpreter. The
+    current ``kap`` package itself still comes exclusively from the new wheel.
+    """
     env_dir = workspace / "benchmark-venv"
-    subprocess.run([base_python, "-m", "venv", str(env_dir)], cwd=ROOT, check=True, timeout=60)
+    subprocess.run(
+        [base_python, "-m", "venv", "--system-site-packages", str(env_dir)],
+        cwd=ROOT,
+        check=True,
+        timeout=60,
+    )
     env_python = env_dir / "bin" / "python"
     if not env_python.exists():
         raise SystemExit(f"Temporary benchmark interpreter was not created: {env_python}")
     process = subprocess.run(
-        [str(env_python), "-m", "pip", "install", "--disable-pip-version-check", "--quiet", str(wheel)],
+        [
+            str(env_python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--quiet",
+            str(wheel),
+            *BENCHMARK_EXTRA_DEPENDENCIES,
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -213,6 +240,8 @@ def _job(
             "iterations": iterations,
             "warmups": warmups,
             "status": "timeout",
+            "error_rate": 0.0,
+            "timeout_rate": 1.0,
             "error": f"worker exceeded hard timeout ({timeout_s:.0f}s)",
             "started_at_utc": started,
         }
@@ -224,6 +253,8 @@ def _job(
             "iterations": iterations,
             "warmups": warmups,
             "status": "error",
+            "error_rate": 1.0,
+            "timeout_rate": 0.0,
             "error": f"worker exit={process.returncode}: {process.stderr.strip()[-1000:]}",
             "started_at_utc": started,
         }
@@ -236,6 +267,8 @@ def _job(
             "iterations": iterations,
             "warmups": warmups,
             "status": "error",
+            "error_rate": 1.0,
+            "timeout_rate": 0.0,
             "error": f"worker emitted invalid JSON: {process.stdout[-1000:]}",
             "started_at_utc": started,
         }
@@ -334,15 +367,7 @@ def main() -> int:
     offline_jobs = [job for job in jobs if job[1] not in LIVE_SCENARIOS]
     live_jobs = [job for job in jobs if job[1] in LIVE_SCENARIOS]
     results: list[dict[str, Any]] = []
-    dependency_status = dependency_report(base_python)
     print(f"Base interpreter: {base_python}", flush=True)
-    print("Dependency preflight:", flush=True)
-    for repo in REPOS:
-        missing_modules = dependency_status.get(repo, [])
-        print(
-            f"  {repo}: {'ok' if not missing_modules else 'missing ' + ', '.join(missing_modules)}",
-            flush=True,
-        )
 
     # Always benchmark the current checkout as the newly built artifact. The
     # disposable environment prevents an old editable install from leaking in.
@@ -350,6 +375,14 @@ def main() -> int:
         benchmark_workspace = Path(temp_dir)
         wheel = build_current_wheel(base_python, benchmark_workspace)
         python = prepare_isolated_environment(base_python, wheel, benchmark_workspace)
+        dependency_status = dependency_report(python)
+        print("Worker dependency preflight:", flush=True)
+        for repo in REPOS:
+            missing_modules = dependency_status.get(repo, [])
+            print(
+                f"  {repo}: {'ok' if not missing_modules else 'missing ' + ', '.join(missing_modules)}",
+                flush=True,
+            )
         print(f"Artifact wheel: {wheel}", flush=True)
         print(f"Benchmark interpreter: {python}", flush=True)
         print(f"Offline jobs: {len(offline_jobs)}; live jobs: {len(live_jobs)}", flush=True)
@@ -376,16 +409,16 @@ def main() -> int:
         "meta": {
             "run_id": utc_stamp(),
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-            "python_executable": python,
-            "base_python_executable": base_python,
-            "artifact_wheel": str(wheel),
+            "python_executable": Path(python).name,
+            "base_python_executable": Path(base_python).name,
+            "artifact_wheel": wheel.name,
             "python_version": next((row.get("python_version") for row in results if row.get("python_version")), "unknown"),
             "profile": args.profile,
             "live": args.live,
             "offline_loads": loads,
             "live_iterations": args.live_iterations if args.live else 0,
             "network_policy": "public kap.org.tr only; no MKK endpoints",
-            "repo_roots": {key: str(value) for key, value in roots.items()},
+            "repo_roots": {key: value.name for key, value in roots.items()},
             "dependency_preflight": dependency_status,
         },
         "results": results,

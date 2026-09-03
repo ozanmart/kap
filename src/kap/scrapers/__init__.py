@@ -7,11 +7,11 @@ from typing import Any
 
 _LAZY_EXPORTS = {
     "BaseScraper": (".base", "BaseScraper"),
-    "KapError": (".base", "KapError"),
-    "KapConnectionError": (".base", "KapConnectionError"),
-    "KapDeadlineExceeded": (".base", "KapDeadlineExceeded"),
-    "KapValidationError": (".base", "KapValidationError"),
-    "KapNotFoundError": (".base", "KapNotFoundError"),
+    "KapError": ("..exceptions", "KapError"),
+    "KapConnectionError": ("..exceptions", "KapConnectionError"),
+    "KapDeadlineExceeded": ("..exceptions", "KapDeadlineExceeded"),
+    "KapValidationError": ("..exceptions", "KapValidationError"),
+    "KapNotFoundError": ("..exceptions", "KapNotFoundError"),
     "ListingsScraper": (".listings", "ListingsScraper"),
     "get_bundled_companies": (".listings", "get_bundled_companies"),
     "DisclosuresScraper": (".disclosures", "DisclosuresScraper"),

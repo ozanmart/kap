@@ -8,7 +8,20 @@ version = "0.1.0"
 description = "Agent-Native Python SDK & Toolkit for KAP (Public Disclosure Platform) and Borsa Istanbul"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "LicenseRef-Proprietary"
+license = "MIT"
+keywords = ["kap", "borsa-istanbul", "bist", "disclosures", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
 authors = [
     { name = "Ozan Mart" }
 ]
@@ -38,4 +51,8 @@ kap = "kap.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-kap = ["data/*.json"]
+kap = ["data/*.json", "py.typed"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

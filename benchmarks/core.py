@@ -34,9 +34,9 @@ SCENARIO_LABELS = {
 }
 
 OFFLINE_LOADS = {
-    "smoke": [1, 10],
-    "standard": [1, 100, 1_000],
-    "stress": [1, 100, 1_000, 10_000],
+    "smoke": [1, 5],
+    "standard": [1, 5, 10, 25, 50],
+    "stress": [1, 5, 10, 25, 50, 100, 1_000],
 }
 
 
@@ -64,6 +64,7 @@ def summarize_latencies(samples_ms: list[float]) -> dict[str, float | None]:
             "p95_ms": None,
             "p99_ms": None,
             "max_ms": None,
+            "stddev_ms": None,
         }
     return {
         "mean_ms": statistics.fmean(samples_ms),
@@ -72,6 +73,7 @@ def summarize_latencies(samples_ms: list[float]) -> dict[str, float | None]:
         "p95_ms": percentile(samples_ms, 0.95),
         "p99_ms": percentile(samples_ms, 0.99),
         "max_ms": max(samples_ms),
+        "stddev_ms": statistics.pstdev(samples_ms),
     }
 
 
@@ -98,25 +100,32 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# KAP four-repository benchmark",
         "",
-        f"Generated: `{meta['generated_at_utc']}`  ",
-        f"Interpreter: `{meta['python_executable']}` ({meta['python_version']})  ",
+        f"Generated: `{meta['generated_at_utc']}`<br>",
+        f"Interpreter: `{meta['python_executable']}` ({meta['python_version']})<br>",
         f"Profile: `{meta['profile']}`; live: `{str(meta['live']).lower()}`",
         "",
         "## Results",
         "",
-        "| Repository | Scenario | Load | Status | p50 ms | p95 ms | ops/s | Peak RSS MB | Items | Correct |",
-        "|---|---|---:|---|---:|---:|---:|---:|---:|---|",
+        "| Repository | Scenario | Load | Status | min | p50 | p95 | p99 | max | mean | σ ms | ops/s | err % | timeout % | RSS MB | Items | Correct |",
+        "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         lines.append(
-            "| {repo} | {scenario} | {load} | {status} | {p50} | {p95} | {ops} | {rss} | {items} | {correct} |".format(
+            "| {repo} | {scenario} | {load} | {status} | {min} | {p50} | {p95} | {p99} | {max} | {mean} | {stddev} | {ops} | {error_rate} | {timeout_rate} | {rss} | {items} | {correct} |".format(
                 repo=REPO_LABELS.get(row["repo"], row["repo"]),
                 scenario=SCENARIO_LABELS.get(row["scenario"], row["scenario"]),
                 load=row.get("iterations", "—"),
                 status=row["status"],
+                min=_fmt(row.get("min_ms")),
                 p50=_fmt(row.get("p50_ms")),
                 p95=_fmt(row.get("p95_ms")),
+                p99=_fmt(row.get("p99_ms")),
+                max=_fmt(row.get("max_ms")),
+                mean=_fmt(row.get("mean_ms")),
+                stddev=_fmt(row.get("stddev_ms")),
                 ops=_fmt(row.get("throughput_ops_s")),
+                error_rate=_fmt(100 * float(row.get("error_rate", 0.0))),
+                timeout_rate=_fmt(100 * float(row.get("timeout_rate", 0.0))),
                 rss=_fmt(row.get("peak_rss_mb")),
                 items=_fmt(row.get("item_count"), 0),
                 correct=("yes" if row.get("correct") is True else "no" if row.get("correct") is False else "—"),
@@ -180,7 +189,7 @@ def runtime_meta(python_executable: str, profile: str, live: bool) -> dict[str, 
     return {
         "run_id": utc_stamp(),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "python_executable": python_executable,
+        "python_executable": Path(python_executable).name,
         "python_version": sys.version.split()[0],
         "profile": profile,
         "live": live,

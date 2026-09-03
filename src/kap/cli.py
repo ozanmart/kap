@@ -7,7 +7,29 @@ import click
 from .client import KapClient
 
 
-@click.group()
+def _short_error(exc: Exception) -> str:
+    """Render deterministic CLI errors without response bodies or tracebacks."""
+    message = " ".join(str(exc).split()) or type(exc).__name__
+    return f"{type(exc).__name__}: {message}"[:300]
+
+
+class _KapCLIGroup(click.Group):
+    def invoke(self, ctx: click.Context):
+        try:
+            return super().invoke(ctx)
+        except click.ClickException:
+            raise
+        except Exception as exc:
+            raise click.ClickException(_short_error(exc)) from None
+
+
+def _json_model(value):
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return value
+
+
+@click.group(cls=_KapCLIGroup)
 @click.version_option(package_name="kap")
 def main():
     """KAP (Kamuyu Aydınlatma Platformu) & Borsa Istanbul Agent-Native CLI."""
@@ -116,6 +138,40 @@ def disclosures(ticker: str, notification_type: str, days: int, limit: int):
 
 
 @main.command()
+@click.argument("disclosure_index", type=click.IntRange(min=1))
+@click.option("--max-chars", type=click.IntRange(min=1), default=None, help="Limit rendered disclosure body characters")
+@click.option("--json-out", is_flag=True, help="Output JSON")
+def detail(disclosure_index: int, max_chars: int | None, json_out: bool):
+    """Read a disclosure's normalized metadata, body, and attachments."""
+    with KapClient() as client:
+        item = client.get_disclosure_detail(disclosure_index)
+        if json_out:
+            payload = _json_model(item)
+            if max_chars is not None:
+                payload["content_text"] = (payload.get("content_text") or "")[:max_chars]
+            click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+
+        body = item.content_text or ""
+        if max_chars is not None:
+            body = body[:max_chars]
+        click.echo(f"{item.publish_date or '-'} [{item.stock_code or 'GENERAL'}] {item.title or '-'}")
+        disclosure_type = item.disclosure_type or item.disclosure_class or "-"
+        click.echo(f"Company: {item.company_title or '-'} | Type: {disclosure_type}")
+        click.echo(body)
+        rendered_urls: set[str] = set()
+        for attachment in item.attachment_metadata:
+            file_name = attachment.get("file_name") or attachment.get("name") or attachment.get("fileName") or "-"
+            url = attachment.get("url") or attachment.get("download_url") or attachment.get("downloadUrl") or ""
+            if url:
+                rendered_urls.add(str(url))
+            click.echo(f"Attachment: {file_name} {url}".rstrip())
+        for url in item.attachment_urls:
+            if url not in rendered_urls:
+                click.echo(f"Attachment: {url}")
+
+
+@main.command()
 @click.option("--days", default=90, help="Days ahead (default: 90)")
 @click.option("--ticker", default=None, help="Filter by ticker")
 def calendar(days: int, ticker: str | None):
@@ -140,6 +196,51 @@ def statement(disclosure_index: int):
         click.echo(f"Periods: {', '.join(stmt.period_labels)}")
         for stmt_name, count in stmt.statement_counts.items():
             click.echo(f"  • {stmt_name}: {count} line items")
+
+
+@main.command()
+@click.argument("ticker")
+@click.option("--year", type=click.IntRange(min=2000, max=2100), required=True)
+@click.option("--period", default="annual", show_default=True, help="annual, Q1, Q2, Q3, or Q4")
+@click.option("--json-out", is_flag=True, help="Output JSON")
+def financials(ticker: str, year: int, period: str, json_out: bool):
+    """Find and parse the correct financial report for ticker/year/period."""
+    with KapClient() as client:
+        stmt = client.get_financials(ticker, year, period)
+        if json_out:
+            click.echo(json.dumps(_json_model(stmt), ensure_ascii=False, indent=2))
+            return
+        click.echo(f"Financials {stmt.stock_code or ticker.upper()} {year} {period} (#{stmt.disclosure_index})")
+        click.echo(f"Currency: {stmt.currency or '-'} | Scale: {stmt.scale or 1}")
+        click.echo(f"Periods: {', '.join(stmt.period_labels)}")
+        click.echo(f"Line items: {len(stmt.items)}")
+
+
+@main.command()
+@click.argument("category", type=click.Choice(["indices", "sectors", "markets"], case_sensitive=False))
+@click.option("--json-out", is_flag=True, help="Output JSON")
+def taxonomy(category: str, json_out: bool):
+    """List KAP indices, sectors/subsectors, or trading markets."""
+    with KapClient() as client:
+        getters = {
+            "indices": client.get_indices,
+            "sectors": client.get_sectors,
+            "markets": client.get_markets,
+        }
+        rows = getters[category.lower()]()
+        if json_out:
+            click.echo(json.dumps([_json_model(row) for row in rows], ensure_ascii=False, indent=2))
+            return
+        click.echo(f"KAP {category.title()} ({len(rows)} items):")
+        for row in rows:
+            code = (
+                getattr(row, "code", None)
+                or getattr(row, "market_oid", None)
+                or getattr(row, "sector_oid", None)
+                or "-"
+            )
+            name = getattr(row, "name", None) or getattr(row, "market_name", None) or "-"
+            click.echo(f"  • {code}: {name}")
 
 
 @main.command()

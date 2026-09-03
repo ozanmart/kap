@@ -22,16 +22,21 @@ python -m benchmarks.run --profile standard
 
 Profiles:
 
-- `smoke`: 1 and 10 operations;
-- `standard`: 1, 100, and 1,000 operations;
-- `stress`: 1, 100, 1,000, and 10,000 operations.
+- `smoke`: 1 and 5 operations;
+- `standard`: 1, 5, 10, 25, and 50 operations;
+- `stress`: the standard levels plus 100 and 1,000 operations.
 
 The `auto` interpreter selector prefers the repository `.venv` and never resolves
 a virtualenv launcher to its base interpreter. It preflights all four repositories,
-builds the current checkout into a fresh wheel, and installs that wheel plus runtime
-dependencies into a disposable benchmark environment. Comparison repositories with
-missing optional dependencies are reported as `skipped`. If every current-`kap` job
-is skipped, the benchmark exits non-zero. It can be selected explicitly:
+builds the current checkout into a fresh wheel, and installs that wheel into a
+disposable environment which inherits the selected interpreter's preflighted
+comparison dependencies. The current `kap` import still comes only from the newly
+build wheel. The harness installs the comparison-only packages (`requests`,
+`pandas`, `html5lib`, `pyppeteer`, `tenacity`, and `python-dotenv`) into that
+disposable environment and runs preflight there. Comparison repositories with
+missing optional dependencies are reported
+as `skipped`. If every current-`kap` job is skipped, the benchmark exits non-zero.
+It can be selected explicitly:
 
 ```bash
 python -m benchmarks.run --python /opt/miniconda3/bin/python3 --profile standard
@@ -44,6 +49,10 @@ python -m benchmarks.run --profile smoke --live --live-iterations 1
 ```
 
 Use `--repo-root REPO=/new/path` to relocate a source repository. Valid keys are `kap`, `pykap`, `kap_tr_sdk`, and `bist_agent`.
+For repeatable local configuration without command-line overrides, set
+`KAP_BENCHMARK_PYKAP_ROOT`, `KAP_BENCHMARK_KAP_TR_SDK_ROOT`, and
+`KAP_BENCHMARK_BIST_AGENT_ROOT`. Reports keep only repository labels, never
+local absolute paths.
 
 Reports are written as timestamped JSON and Markdown plus stable `benchmark-results/latest.json` and `benchmark-results/latest.md` files.
 
@@ -51,6 +60,8 @@ Reports are written as timestamped JSON and Markdown plus stable `benchmark-resu
 
 - Compare throughput only within the same scenario and load.
 - Treat `Correct: no`, `error`, and `timeout` as failures, irrespective of speed.
+- Live registry correctness requires at least 800 unique valid tickers plus a
+  fixed reference set; a fast but incomplete 750–790-row result is a failure.
 - `skipped` means the repository does not expose an equivalent local/public operation; it is not converted into a zero or silently replaced by harness code.
 - Live timings include KAP and network variability. Run them repeatedly at different times before making architectural decisions.
 - `Peak RSS` is process peak resident memory, including imports and dependencies.

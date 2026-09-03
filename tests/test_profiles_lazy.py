@@ -5,9 +5,12 @@ import subprocess
 import sys
 import threading
 import time
+import inspect
 
 from kap.cache import CacheManager
 from kap.config import KapConfig
+from kap.client import KapClient
+from kap.async_client import AsyncKapClient
 
 
 def test_agent_profiles_have_explicit_retry_and_deadline_contracts() -> None:
@@ -16,7 +19,11 @@ def test_agent_profiles_have_explicit_retry_and_deadline_contracts() -> None:
     resilient = KapConfig(profile="resilient")
 
     assert fast.max_retries == 1
+    assert fast.connect_timeout_s < balanced.connect_timeout_s
+    assert balanced.connect_timeout_s == 3.0
+    assert balanced.max_retries == 3
     assert fast.request_deadline_s < balanced.request_deadline_s < resilient.request_deadline_s
+    assert resilient.connect_timeout_s > balanced.connect_timeout_s
     assert fast.stale_if_error is True
     assert fast.stale_while_revalidate is False
     assert resilient.max_retries > balanced.max_retries
@@ -106,3 +113,18 @@ def test_importing_kap_and_constructing_client_stays_on_lightweight_path() -> No
         env={**__import__("os").environ, "PYTHONPATH": source_root},
     ).strip()
     assert output == "[]"
+
+
+def test_sync_and_async_public_query_surfaces_stay_in_parity() -> None:
+    ignored = {"close", "clear_cache", "score_company_events"}
+    sync_methods = {
+        name
+        for name, value in inspect.getmembers(KapClient, inspect.isfunction)
+        if not name.startswith("_") and name not in ignored
+    }
+    async_methods = {
+        name
+        for name, value in inspect.getmembers(AsyncKapClient, inspect.isfunction)
+        if not name.startswith("_") and name not in {"aclose", "clear_cache", "score_company_events"}
+    }
+    assert sync_methods == async_methods

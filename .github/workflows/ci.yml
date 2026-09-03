@@ -26,9 +26,12 @@ jobs:
           python -m pip install ".[dev]"
           python -m build --wheel --outdir dist
           python -m pip install --force-reinstall --no-deps dist/kap-*.whl
+          python -m pip check
       - name: Compile sources
         run: python -m compileall -q src tests
       - name: Run tests
         run: python -m pytest -q
+      - name: Run tests against installed wheel
+        run: python -m pytest -q -o pythonpath=
       - name: Verify installed wheel
         run: python -I -c "import kap; print(kap.__version__)"

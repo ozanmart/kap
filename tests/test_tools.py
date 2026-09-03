@@ -48,7 +48,7 @@ def test_toolkit_execution_extracts_multiple_events(monkeypatch):
         url="https://www.kap.org.tr/tr/Bildirim/9876",
         stock_code="BIMAS",
     )
-    monkeypatch.setattr(toolkit.client, "get_disclosure_detail", lambda index: detail)
+    monkeypatch.setattr(toolkit.client.disclosures, "get_disclosure_detail", lambda index: detail)
 
     result = toolkit.extract_disclosure_events({
         "disclosure_index": 9876,
@@ -83,6 +83,8 @@ def test_toolkit_detail_supports_metadata_and_body_truncation(monkeypatch):
         stock_code="THYAO",
         company_title="TÜRK HAVA YOLLARI A.O.",
         publish_date="01.09.2026 10:00:00",
+        disclosure_type="ÖDA",
+        disclosure_class="ODA",
         attachment_metadata=[{"objId": "file-1"}],
     )
     monkeypatch.setattr(toolkit.client, "get_disclosure_detail", lambda index: detail)
@@ -94,4 +96,6 @@ def test_toolkit_detail_supports_metadata_and_body_truncation(monkeypatch):
     assert result.content_text == "12345"
     assert result.truncated is True
     assert result.attachment_metadata == [{"objId": "file-1"}]
+    assert result.disclosure_type == "ÖDA"
+    assert result.disclosure_class == "ODA"
     assert result.warnings

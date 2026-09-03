@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import Any
 from bs4 import BeautifulSoup
 
@@ -28,7 +29,8 @@ TITLE_SUBSIDIARIES = "Bağlı Ortaklıklar, Finansal Duran Varlıklar ile Finans
 
 def _normalize_label(value: str | None) -> str:
     """Normalize live KAP table headers for spacing and punctuation changes."""
-    return re.sub(r"[\W_]+", "", clean_text(value)).casefold()
+    folded = unicodedata.normalize("NFKD", clean_text(value).casefold())
+    return "".join(char for char in folded if char.isalnum() and not unicodedata.combining(char))
 
 
 def _row_value(row: dict[str, str], *keys: str) -> str | None:
@@ -186,6 +188,30 @@ def _rsc_scalar_fields(html: str) -> dict[str, str]:
     return result
 
 
+def _rsc_table_rows(html: str, *title_fragments: str) -> list[dict[str, Any]]:
+    """Return a structured table carried in a current KAP RSC item value."""
+    wanted = tuple(_normalize_label(fragment) for fragment in title_fragments)
+    for record in iter_rsc_items(html):
+        key = " ".join(
+            str(record.get(name) or "")
+            for name in ("item_key", "item_name")
+        )
+        normalized = _normalize_label(key)
+        if not any(fragment and fragment in normalized for fragment in wanted):
+            continue
+        value = unwrap_rsc_value(record.get("value"))
+        if isinstance(value, list):
+            return [row for row in value if isinstance(row, dict)]
+    return []
+
+
+def _currency_code(value: Any, default: str = "TRY") -> str:
+    if isinstance(value, dict):
+        value = value.get("key") or value.get("text") or value.get("value")
+    text = clean_text(str(value or ""))
+    return text.upper() if text else default
+
+
 def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyGeneralInfo:
     """Parse raw HTML of KAP company general info page into CompanyGeneralInfo model."""
     soup = BeautifulSoup(html, "lxml")
@@ -210,23 +236,44 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
 
     # Shareholders >=5%
     raw_shareholders = _extract_table_rows(soup, TITLE_SHAREHOLDERS)
+    if not raw_shareholders:
+        raw_shareholders = _rsc_table_rows(html, "sermayede_dogrudan", TITLE_SHAREHOLDERS)
     shareholders: list[Shareholder] = []
     for r in raw_shareholders:
         title = _row_value(
             r,
             "Ortağın Adı-Soyadı/Ticaret Ünvanı",
             "Ortağın Adı Soyadı / Ticaret Ünvanı",
+            "shareholder",
         ) or list(r.values())[0]
-        if not title:
+        if not title or _normalize_label(str(title)) in {"diğer", "diger", "toplam", "other", "total"}:
             continue
         nominal = normalize_numeric_value(
-            _row_value(r, "Sermayedeki Payı (TL)", "Sermayedeki Payı(TL)", "Sermayedeki Payı")
+            _row_value(
+                r,
+                "Sermayedeki Payı (TL)",
+                "Sermayedeki Payı(TL)",
+                "Sermayedeki Payı",
+                "shareInCapital",
+            )
         )
         share_ratio = normalize_numeric_value(
-            _row_value(r, "Sermayedeki Payı (%)", "Sermayedeki Payı(%)", "Sermaye Payı (%)")
+            _row_value(
+                r,
+                "Sermayedeki Payı (%)",
+                "Sermayedeki Payı(%)",
+                "Sermaye Payı (%)",
+                "ratioInCapital",
+            )
         )
         voting_ratio = normalize_numeric_value(
-            _row_value(r, "Oy Hakkı Oranı (%)", "Oy Hakkı Oranı(%)", "Oy Hakkı Payı (%)")
+            _row_value(
+                r,
+                "Oy Hakkı Oranı (%)",
+                "Oy Hakkı Oranı(%)",
+                "Oy Hakkı Payı (%)",
+                "votingRightRatio",
+            )
         )
         shareholders.append(
             Shareholder(
@@ -239,10 +286,12 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
 
     # Free Float
     raw_float = _extract_table_rows(soup, TITLE_FREE_FLOAT)
+    if not raw_float:
+        raw_float = _rsc_table_rows(html, "fiili_dolasimdaki_pay", TITLE_FREE_FLOAT)
     free_floats: list[FreeFloatInfo] = []
     ticker = None
     for r in raw_float:
-        code = _row_value(r, "Borsa Kodu", "Pay Kodu")
+        code = _row_value(r, "Borsa Kodu", "Pay Kodu", "isin", "stockCode")
         if code and not ticker:
             ticker = str(code).strip().upper()
         nominal = normalize_numeric_value(
@@ -251,6 +300,7 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
                 "Fiili Dolaşımdaki Payların Nominal Tutarı (TL)",
                 "Fiili Dolaşımdaki Pay Tutarı(TL)",
                 "Nominal Tutar",
+                "actualSharesOutstanding",
             )
         )
         ratio = normalize_numeric_value(
@@ -260,6 +310,7 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
                 "Fiili Dolaşımdaki Pay Oranı(%)",
                 "Fiili Dolaşım Oranı (%)",
                 "Oran (%)",
+                "actualOutstandingSharesRatio",
             )
         )
         free_floats.append(
@@ -272,18 +323,30 @@ def parse_company_general_html(html: str, member_oid: str, url: str) -> CompanyG
 
     # Subsidiaries & Affiliates
     raw_sub = _extract_table_rows(soup, TITLE_SUBSIDIARIES)
+    if not raw_sub:
+        raw_sub = _rsc_table_rows(html, "bagli_ortakliklar", TITLE_SUBSIDIARIES)
     subsidiaries: list[Subsidiary] = []
     for r in raw_sub:
-        sub_title = _row_value(r, "Ticaret Ünvanı", "Şirket Ünvanı") or list(r.values())[0]
+        sub_title = _row_value(r, "Ticaret Ünvanı", "Şirket Ünvanı", "companyTitle") or list(r.values())[0]
         if not sub_title:
             continue
-        act = _row_value(r, "Faaliyet Konusu")
-        cap = normalize_numeric_value(_row_value(r, "Ödenmiş/Çıkarılmış Sermayesi", "Sermayesi"))
-        amt = normalize_numeric_value(_row_value(r, "Şirketin Sermayedeki Payı", "Pay Tutarı"))
-        sub_ratio = normalize_numeric_value(
-            _row_value(r, "Şirketin Sermayedeki Payı (%)", "Sermaye Payı (%)", "Oran (%)")
+        act = _row_value(r, "Faaliyet Konusu", "scopeOfActivitiesOfCompany")
+        cap = normalize_numeric_value(
+            _row_value(r, "Ödenmiş/Çıkarılmış Sermayesi", "Sermayesi", "paidInOrIssuedCapital")
         )
-        curr = _row_value(r, "Para Birimi") or "TRY"
+        amt = normalize_numeric_value(
+            _row_value(r, "Şirketin Sermayedeki Payı", "Pay Tutarı", "capitalShareOfCompany")
+        )
+        sub_ratio = normalize_numeric_value(
+            _row_value(
+                r,
+                "Şirketin Sermayedeki Payı (%)",
+                "Sermaye Payı (%)",
+                "Oran (%)",
+                "ratioOfCapitalShareOfCompany",
+            )
+        )
+        curr = _currency_code(_row_value(r, "Para Birimi", "monetaryUnit"))
         subsidiaries.append(
             Subsidiary(
                 company_title=sub_title,
@@ -329,11 +392,17 @@ class CompanyGeneralScraper:
         url = f"/{self.config.lang}/sirket-bilgileri/genel/{member_oid.strip()}"
         resp = self.base.request_sync("GET", url)
         full_url = f"{self.config.base_url.rstrip('/')}{url}"
-        return parse_company_general_html(resp.text, member_oid=member_oid, url=full_url)
+        return self.base.run_with_deadline_sync(
+            lambda: parse_company_general_html(resp.text, member_oid=member_oid, url=full_url),
+            deadline_at=self.base.operation_deadline(),
+        )
 
     async def aget_company_general_info(self, member_oid: str) -> CompanyGeneralInfo:
         """Async fetch and parse Genel Bilgiler."""
         url = f"/{self.config.lang}/sirket-bilgileri/genel/{member_oid.strip()}"
         resp = await self.base.request_async("GET", url)
         full_url = f"{self.config.base_url.rstrip('/')}{url}"
-        return parse_company_general_html(resp.text, member_oid=member_oid, url=full_url)
+        return await self.base.run_with_deadline_async(
+            lambda: parse_company_general_html(resp.text, member_oid=member_oid, url=full_url),
+            deadline_at=self.base.operation_deadline(),
+        )

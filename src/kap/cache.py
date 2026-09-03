@@ -22,25 +22,30 @@ class InMemoryCache:
 
     def __init__(self) -> None:
         self._store: dict[str, tuple[float, Any]] = {}
+        self._lock = threading.RLock()
 
     def get(self, key: str, default: Any = None) -> Any:
-        if key not in self._store:
-            return default
-        expiry, val = self._store[key]
-        if expiry > 0 and time.time() > expiry:
-            del self._store[key]
-            return default
-        return val
+        with self._lock:
+            if key not in self._store:
+                return default
+            expiry, val = self._store[key]
+            if expiry > 0 and time.time() > expiry:
+                del self._store[key]
+                return default
+            return val
 
     def set(self, key: str, value: Any, expire: int | None = None) -> None:
-        expiry = (time.time() + expire) if expire else 0.0
-        self._store[key] = (expiry, value)
+        with self._lock:
+            expiry = (time.time() + expire) if expire else 0.0
+            self._store[key] = (expiry, value)
 
     def delete(self, key: str) -> None:
-        self._store.pop(key, None)
+        with self._lock:
+            self._store.pop(key, None)
 
     def clear(self) -> None:
-        self._store.clear()
+        with self._lock:
+            self._store.clear()
 
 
 class CacheManager:
@@ -71,8 +76,8 @@ class CacheManager:
             try:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
                 self._disk = diskcache.Cache(str(self.cache_dir))
-            except Exception as e:
-                logger.debug(f"Could not initialize disk cache at {self.cache_dir}: {e}")
+            except Exception as exc:
+                logger.debug("Could not initialize disk cache at %s: %s", self.cache_dir, exc)
                 self._disk = None
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -97,7 +102,8 @@ class CacheManager:
                 else:
                     self.last_metadata = {}
                 return disk_val
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not read disk cache entry %s: %s", key, exc)
                 self.last_metadata = {}
                 return default
         self.last_metadata = {}
@@ -125,8 +131,8 @@ class CacheManager:
                 if self.stale_retention_s:
                     self._disk.set(self._stale_key(key), value, expire=stale_expire)
                     self._disk.set(self._stale_metadata_key(key), metadata, expire=stale_expire)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not write disk cache entry %s: %s", key, exc)
 
     @staticmethod
     def _metadata_key(key: str) -> str:
@@ -160,7 +166,8 @@ class CacheManager:
                     self._memory.set(self._stale_metadata_key(key), metadata, expire=ttl)
                     self.last_metadata = {**metadata, "stale": True}
                 return disk_val
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not read stale disk cache entry %s: %s", key, exc)
                 return default
         return default
 
@@ -212,8 +219,8 @@ class CacheManager:
         if self._disk is not None:
             try:
                 self._disk.clear()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not clear disk cache: %s", exc)
 
     def close(self) -> None:
         """Close the persistent cache handle, if one is open."""
@@ -222,8 +229,8 @@ class CacheManager:
         if self._disk is not None:
             try:
                 self._disk.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not close disk cache: %s", exc)
             self._disk = None
 
     def cached_call(

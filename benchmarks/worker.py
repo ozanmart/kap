@@ -23,7 +23,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     root = configure_source_path(args.repo, Path(args.repo_root) if args.repo_root else None)
     base: dict[str, Any] = {
         "repo": args.repo,
-        "repo_root": str(root),
+        # Reports may be committed or shared; keep local checkout paths out of
+        # the artifact while retaining the useful repository label.
+        "repo_root": root.name,
         "scenario": args.scenario,
         "iterations": args.iterations,
         "warmups": args.warmups,
@@ -56,6 +58,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             base["throughput_ops_s"] = args.iterations / total_s if total_s else None
 
         base.update(summarize_latencies(samples_ms))
+        base["error_rate"] = 0.0
+        base["timeout_rate"] = 0.0
         base.update(result)
         if result.get("correct") is False:
             base["warning"] = "deterministic correctness check failed; do not treat throughput as a valid win"
@@ -87,6 +91,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         base.update(
             {
                 "status": "error",
+                "error_rate": 1.0,
+                "timeout_rate": 0.0,
                 "error": f"{type(exc).__name__}: {exc}",
                 "traceback": traceback.format_exc(limit=8),
                 "peak_rss_mb": peak_rss_mb(),

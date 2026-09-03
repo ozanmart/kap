@@ -1,17 +1,21 @@
 # License and provenance audit
 
-Audit date: 2026-09-02
+Audit date: 2026-09-03
 
 ## Findings
 
-- The current KAP package metadata declares `Proprietary`; no MIT redistribution claim is made.
-- The local reference project at `/Users/omerozanmart/Downloads/bist-investment-agent-main` declares `Proprietary` in its `pyproject.toml`.
+- The current KAP package metadata and repository `LICENSE` declare MIT, selected by the maintainer on 2026-09-03.
+- The local reference project at `Downloads/bist-investment-agent-main` declares `Proprietary` in its `pyproject.toml`.
 - `KAP_REPORT.md` describes this project as a synthesis of the reference repositories and specifically identifies `bist-investment-agent` as a reference for the SSR parser, financial statement parser, event extractor, and SQLite architecture.
 - There is no checked-in provenance manifest, permission record, or file-by-file clean-room rewrite record in this repository.
 
 ## Decision
 
-The package metadata, README, and repository `LICENSE` notice use a conservative `Proprietary` / provenance-pending status. The project must not be redistributed as MIT until the source owner grants compatible redistribution rights or the affected implementation is independently rewritten and documented.
+The maintainer selected MIT for this repository. This audit records the
+remaining provenance evidence gap; it does not override upstream terms or grant
+redistribution rights. Before publishing a release, retain written permission
+or a clean-room provenance record for any code adapted from a differently
+licensed reference.
 
 This audit does not grant any license, and it is not a substitute for legal review. Before publishing, add one of the following evidence packages:
 

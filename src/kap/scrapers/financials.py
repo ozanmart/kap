@@ -12,8 +12,9 @@ from bs4 import BeautifulSoup
 from ..config import KapConfig
 from ..constants import ENDPOINT_DISCLOSURE_PAGE, ENDPOINT_FINANCIAL_DOWNLOAD_XLS, STATEMENT_NAME_BY_ROLE
 from ..models.financials import FinancialLineItem, FinancialStatement
+from ..exceptions import KapError
 from ..parsing.html_parser import clean_text, normalize_decimal_value, normalize_numeric_value
-from .base import BaseScraper, KapError
+from .base import BaseScraper
 
 logger = logging.getLogger("kap.scrapers.financials")
 
@@ -60,12 +61,42 @@ def _presentation_metadata(soup: BeautifulSoup) -> tuple[str | None, int | None]
     text = clean_text(soup.get_text(" ", strip=True))
     scale: int | None = None
     currency: str | None = None
+
+    # Current KAP renders this as a two-cell row such as
+    # ``Sunum Para Birimi | 1.000.000 TL``.
+    presentation_value: str | None = None
+    for row in soup.find_all("tr"):
+        cells = [
+            clean_text(cell.get_text(" ", strip=True))
+            for cell in row.find_all(["th", "td"], recursive=False)
+        ]
+        if len(cells) >= 2 and _normalize_metadata_label(cells[0]) in {
+            "sunumparabirimi",
+            "presentationcurrency",
+        }:
+            presentation_value = cells[-1]
+            break
+
+    if presentation_value:
+        currency_token = re.search(r"\b(TRY|TL|USD|EUR|GBP)\b", presentation_value, flags=re.IGNORECASE)
+        if currency_token:
+            currency = currency_token.group(1).upper()
+            if currency == "TL":
+                currency = "TRY"
+        number_token = re.search(r"\d[\d.,]*", presentation_value)
+        if number_token:
+            parsed_scale = normalize_numeric_value(number_token.group(0))
+            if parsed_scale is not None and float(parsed_scale) > 0:
+                scale = int(parsed_scale)
+        elif currency:
+            scale = 1
+
     scale_match = re.search(
         r"(?:Ölçek|Olcek|Scale|Sunum\s+Ölçeği|Presentation\s+Scale)\s*[:\-]?\s*([\w.,]+)",
         text,
         flags=re.IGNORECASE,
     )
-    if scale_match:
+    if scale is None and scale_match:
         raw_scale = scale_match.group(1).casefold()
         named_scales = {
             "bin": 1_000,
@@ -87,11 +118,15 @@ def _presentation_metadata(soup: BeautifulSoup) -> tuple[str | None, int | None]
         text,
         flags=re.IGNORECASE,
     )
-    if currency_match:
+    if currency is None and currency_match:
         currency = currency_match.group(1).upper()
         if currency in {"TL", "TÜRK LİRASI", "TÜRK LIRASI", "TURK LIRASI"}:
             currency = "TRY"
     return currency, scale
+
+
+def _normalize_metadata_label(value: str) -> str:
+    return re.sub(r"[^a-z0-9çğıöşü]+", "", value.casefold())
 
 
 def _expanded_row_cells(row_node) -> list[tuple[str, str]]:
@@ -315,12 +350,15 @@ class FinancialsScraper:
         route = ENDPOINT_DISCLOSURE_PAGE.format(lang=self.config.lang, disclosure_index=disclosure_index)
         resp = self.base.request_sync("GET", route)
         full_url = f"{self.config.base_url.rstrip('/')}{route}"
-        return parse_financial_statement_html(
-            resp.text,
-            disclosure_index=int(disclosure_index),
-            source_url=full_url,
-            stock_code=stock_code,
-            company_title=company_title,
+        return self.base.run_with_deadline_sync(
+            lambda: parse_financial_statement_html(
+                resp.text,
+                disclosure_index=int(disclosure_index),
+                source_url=full_url,
+                stock_code=stock_code,
+                company_title=company_title,
+            ),
+            deadline_at=self.base.operation_deadline(),
         )
 
     async def aget_financial_statement(
@@ -333,12 +371,15 @@ class FinancialsScraper:
         route = ENDPOINT_DISCLOSURE_PAGE.format(lang=self.config.lang, disclosure_index=disclosure_index)
         resp = await self.base.request_async("GET", route)
         full_url = f"{self.config.base_url.rstrip('/')}{route}"
-        return parse_financial_statement_html(
-            resp.text,
-            disclosure_index=int(disclosure_index),
-            source_url=full_url,
-            stock_code=stock_code,
-            company_title=company_title,
+        return await self.base.run_with_deadline_async(
+            lambda: parse_financial_statement_html(
+                resp.text,
+                disclosure_index=int(disclosure_index),
+                source_url=full_url,
+                stock_code=stock_code,
+                company_title=company_title,
+            ),
+            deadline_at=self.base.operation_deadline(),
         )
 
     def download_financial_report_xls(self, member_oid: str, year: int | str = 2024) -> dict[str, Any]:

@@ -89,11 +89,11 @@ Public KAP endpoint’ine 1.000 eşzamanlı istek gönderilmez; gerçek async
 benchmark farklı disclosure URL’leri, concurrency 1/4/8, connection reuse,
 cancellation ve ortak deadline ile yapılmalıdır.
 
-## Bilinen sınır
+## Lisans/provenance notu
 
 `bist-investment-agent` içindeki MKK provider, attachment downloader ve
 incremental checkpoint backend’i yalnızca `src/kap/backends/optional.py` altında
-opsiyonel protokol olarak taşındı. Kaynak projenin `Proprietary` bildirimi
-nedeniyle bu repository MIT olarak dağıtılamaz; provenance/redistribution izni
-alınana kadar lisans durumu `Proprietary / pending provenance clearance` olarak
-kalır. Ayrıntı: [PROVENANCE_AUDIT.md](/Users/omerozanmart/Desktop/kap/PROVENANCE_AUDIT.md).
+opsiyonel protokol olarak taşındı. Repository artık MIT lisansını kullanıyor;
+maintainer, Proprietary referans kodları için redistribution/provenance
+uyumluluğunu yayın öncesinde teyit etmelidir. Ayrıntı:
+[PROVENANCE_AUDIT.md](PROVENANCE_AUDIT.md).

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from benchmarks.core import percentile, render_markdown, stable_digest, summarize_latencies
+from pathlib import Path
+
+from benchmarks.core import percentile, render_markdown, runtime_meta, stable_digest, summarize_latencies
+from benchmarks.adapters import LIVE_REGISTRY_MIN_TICKERS, _live_registry_result, _warm_cache_exact_lookup
 from benchmarks.run import aggregate_cold_imports, select_python
 
 
@@ -53,6 +56,7 @@ def test_markdown_exposes_incorrect_results_and_skip_reason() -> None:
     assert "| no |" in rendered
     assert "fixture parser returned no rows" in rendered
     assert "no bundled registry" in rendered
+    assert all(not line.endswith(" ") for line in rendered.splitlines())
 
 
 def test_cold_imports_are_aggregated_across_processes() -> None:
@@ -75,5 +79,39 @@ def test_cold_imports_are_aggregated_across_processes() -> None:
 
 
 def test_explicit_virtualenv_interpreter_path_is_not_resolved() -> None:
-    interpreter = "/Users/omerozanmart/Desktop/kap/.venv/bin/python"
+    interpreter = str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python")
     assert select_python(interpreter) == interpreter
+
+
+def test_benchmark_runtime_metadata_does_not_leak_local_paths() -> None:
+    metadata = runtime_meta("/Users/example/.cache/kap/venv/bin/python", "smoke", False)
+    assert metadata["python_executable"] == "python"
+
+
+def test_live_registry_correctness_rejects_incomplete_but_plausible_snapshot() -> None:
+    references = ["THYAO", "BIMAS", "GARAN", "ACSEL", "A1CAP", "ACP"]
+    incomplete = references + [f"X{i:04d}" for i in range(LIVE_REGISTRY_MIN_TICKERS - 7)]
+    assert len(incomplete) == LIVE_REGISTRY_MIN_TICKERS - 1
+    result = _live_registry_result(incomplete)
+    assert result["item_count"] == LIVE_REGISTRY_MIN_TICKERS - 1
+    assert result["correct"] is False
+    assert result["validation"]["minimum_count"] == LIVE_REGISTRY_MIN_TICKERS
+
+
+def test_live_registry_correctness_accepts_complete_valid_snapshot() -> None:
+    references = ["THYAO", "BIMAS", "GARAN", "ACSEL", "A1CAP", "ACP"]
+    complete = references + [f"X{i:04d}" for i in range(LIVE_REGISTRY_MIN_TICKERS - len(references))]
+    result = _live_registry_result(complete)
+    assert result["item_count"] == LIVE_REGISTRY_MIN_TICKERS
+    assert result["correct"] is True
+
+
+def test_current_warm_cache_benchmark_does_not_fall_through_to_source() -> None:
+    operation = _warm_cache_exact_lookup("kap")
+    try:
+        result = operation.invoke()
+    finally:
+        operation.close()
+
+    assert result["correct"] is True
+    assert result["item_count"] == 1

@@ -118,7 +118,7 @@ class GetCompanyDisclosuresInput(ToolInput):
         default="ALL",
         description="Type filter: 'ALL' (all announcements), 'FR' (financial reports), 'ODA' (material event disclosures), 'DUY' (regulatory)",
     )
-    range_days: int = Field(default=365, description="Date range lookback in days (e.g. 30, 90, 365)")
+    range_days: int = Field(default=365, ge=1, le=3650, description="Date range lookback in days (e.g. 30, 90, 365)")
     limit: int = Field(default=30, ge=1, le=100, description="Max disclosures to return")
     page: int = Field(default=1, ge=1)
     page_size: int | None = Field(default=None, ge=1, le=100)
@@ -148,6 +148,8 @@ class GetDisclosureDetailOutput(ToolOutput):
     stock_code: str | None = None
     company_title: str | None = None
     publish_date: str | None = None
+    disclosure_type: str | None = None
+    disclosure_class: str | None = None
     attachment_urls: list[str] = Field(default_factory=list)
     attachment_metadata: list[dict[str, Any]] = Field(default_factory=list)
     truncated: bool = False

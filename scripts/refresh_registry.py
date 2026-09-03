@@ -16,7 +16,7 @@ DEFAULT_OUTPUT = ROOT / "src" / "kap" / "data" / "bist_companies_general.json"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--min-records", type=int, default=750)
+    parser.add_argument("--min-records", type=int, default=800)
     args = parser.parse_args()
 
     config = KapConfig.for_profile(

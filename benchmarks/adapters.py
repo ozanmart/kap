@@ -4,6 +4,8 @@ import asyncio
 import importlib
 import json
 import logging
+import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -14,13 +16,32 @@ from benchmarks.core import stable_digest
 
 
 CURRENT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _external_repo(env_name: str, sibling_name: str, download_name: str) -> Path:
+    """Resolve an optional comparison checkout without embedding local paths."""
+    configured = os.environ.get(env_name)
+    if configured:
+        return Path(configured).expanduser()
+    sibling = CURRENT_ROOT.parent / sibling_name
+    if sibling.exists():
+        return sibling
+    return Path.home() / "Downloads" / download_name
+
+
 DEFAULT_ROOTS = {
     "kap": CURRENT_ROOT,
-    "pykap": Path("/Users/omerozanmart/Downloads/pykap-master"),
-    "kap_tr_sdk": Path("/Users/omerozanmart/Downloads/kap-tr-sdk-main"),
-    "bist_agent": Path("/Users/omerozanmart/Downloads/bist-investment-agent-main"),
+    "pykap": _external_repo("KAP_BENCHMARK_PYKAP_ROOT", "pykap-master", "pykap-master"),
+    "kap_tr_sdk": _external_repo("KAP_BENCHMARK_KAP_TR_SDK_ROOT", "kap-tr-sdk-main", "kap-tr-sdk-main"),
+    "bist_agent": _external_repo(
+        "KAP_BENCHMARK_BIST_AGENT_ROOT",
+        "bist-investment-agent-main",
+        "bist-investment-agent-main",
+    ),
 }
 EXPECTED_REPLAY_TICKERS = {"ACSEL", "ADEL", "A1CAP", "ACP"}
+LIVE_REGISTRY_REFERENCE_TICKERS = {"THYAO", "BIMAS", "GARAN", "ACSEL", "A1CAP", "ACP"}
+LIVE_REGISTRY_MIN_TICKERS = 800
 
 
 class UnsupportedScenario(RuntimeError):
@@ -54,6 +75,32 @@ def _result(values: list[str], *, expected: set[str] | None = None) -> dict[str,
         "correct": actual == expected if expected is not None else None,
         "sample": sorted(actual)[:5],
     }
+
+
+def _live_feed_result(values: list[str]) -> dict[str, Any]:
+    result = _result(values)
+    result["correct"] = bool(result["item_count"]) and all(str(value).isdigit() for value in values if value)
+    return result
+
+
+def _live_registry_result(values: list[str]) -> dict[str, Any]:
+    normalized = [str(value).strip().upper() for value in values if str(value).strip()]
+    result = _result(normalized)
+    unique = set(normalized)
+    result["correct"] = (
+        len(normalized) == len(unique)
+        and len(unique) >= LIVE_REGISTRY_MIN_TICKERS
+        and LIVE_REGISTRY_REFERENCE_TICKERS.issubset(unique)
+        and all(re.fullmatch(r"[A-Z0-9]{2,6}", ticker) for ticker in unique)
+    )
+    if not result["correct"]:
+        result["validation"] = {
+            "minimum_count": LIVE_REGISTRY_MIN_TICKERS,
+            "duplicates": len(normalized) - len(unique),
+            "missing_reference_tickers": sorted(LIVE_REGISTRY_REFERENCE_TICKERS - unique),
+            "invalid_tickers": sorted(ticker for ticker in unique if not re.fullmatch(r"[A-Z0-9]{2,6}", ticker))[:10],
+        }
+    return result
 
 
 def import_target(repo: str) -> dict[str, Any]:
@@ -300,8 +347,28 @@ def _offline_exact_lookup(repo: str) -> Operation:
 
 
 def _warm_cache_exact_lookup(repo: str) -> Operation:
+    if repo == "kap":
+        kap = importlib.import_module("kap")
+        temp_dir = tempfile.TemporaryDirectory(prefix="kap-bench-")
+        client = kap.KapClient(config=kap.KapConfig(enable_cache=True, cache_dir=temp_dir.name))
+        client.get_companies()
+        # A warm hit must not fall through to the data source.
+        client.listings.get_companies = lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("warm cache unexpectedly called the source")
+        )
+
+        def invoke() -> dict[str, Any]:
+            rows = client.get_companies()
+            company = next((row for row in rows if row.ticker == "THYAO"), None)
+            return _result([company.ticker] if company else [], expected={"THYAO"})
+
+        def close() -> None:
+            client.close()
+            temp_dir.cleanup()
+
+        return Operation(invoke, close, "memory/disk cache hit; underlying registry source disabled")
     if repo != "kap_tr_sdk":
-        raise UnsupportedScenario("scenario is specific to kap-tr-sdk's cache-only local path")
+        raise UnsupportedScenario("repository has no comparable warm-cache exact lookup")
     module = importlib.import_module("kap_sdk.kap_client")
     temp_dir = tempfile.TemporaryDirectory(prefix="kap-bench-")
     module._CACHE_DIR = temp_dir.name
@@ -405,7 +472,7 @@ def _live_feed(repo: str) -> Operation:
         def invoke() -> dict[str, Any]:
             rows = client.get_today_disclosures()
             ids = [str(row.disclosure_index or row.disclosure_id or "") for row in rows]
-            return _result(ids)
+            return _live_feed_result(ids)
 
         return Operation(invoke, client.close, "shared httpx.Client; one attempt; 10s request timeout")
     if repo == "bist_agent":
@@ -415,7 +482,7 @@ def _live_feed(repo: str) -> Operation:
         def invoke() -> dict[str, Any]:
             rows = scraper.fetch_main_disclosures()
             ids = [str((row.get("disclosureBasic") or {}).get("disclosureIndex") or "") for row in rows]
-            return _result(ids)
+            return _live_feed_result(ids)
 
         return Operation(invoke, implementation="new httpx.Client per call; tenacity retry policy")
     if repo == "kap_tr_sdk":
@@ -426,7 +493,7 @@ def _live_feed(repo: str) -> Operation:
         def invoke() -> dict[str, Any]:
             rows = loop.run_until_complete(client.get_announcements())
             ids = [str(getattr(row.disclosureBasic, "disclosureIndex", "")) for row in rows]
-            return _result(ids)
+            return _live_feed_result(ids)
 
         def close() -> None:
             client.cache.close()
@@ -439,10 +506,10 @@ def _live_feed(repo: str) -> Operation:
 def _live_registry(repo: str) -> Operation:
     if repo == "kap":
         kap = importlib.import_module("kap")
-        client = kap.KapClient(config=kap.KapConfig(enable_cache=False, timeout_s=12.0, max_retries=1))
+        client = kap.KapClient(config=kap.KapConfig(enable_cache=False, timeout_s=12.0))
 
         def invoke() -> dict[str, Any]:
-            result = _result([row.ticker for row in client.get_companies(online=True, force_refresh=True)])
+            result = _live_registry_result([row.ticker for row in client.get_companies(online=True, force_refresh=True)])
             result["request_metrics"] = dict(client.last_request_metrics)
             return result
 
@@ -452,7 +519,7 @@ def _live_registry(repo: str) -> Operation:
 
         def invoke() -> dict[str, Any]:
             rows = module.get_bist_companies(online=True, output_format="dict") or []
-            return _result([row.get("ticker", "") for row in rows])
+            return _live_registry_result([row.get("ticker", "") for row in rows])
 
         return Operation(invoke, implementation="requests + BeautifulSoup + regex; 30s request timeout")
     if repo == "bist_agent":
@@ -466,7 +533,7 @@ def _live_registry(repo: str) -> Operation:
             normalized = listing_module._normalize_payload(
                 "bist_sirketler", listing_module._extract_json_objects(payload)
             )
-            return _result([row.get("stockCode", "") for row in normalized.get("bist_companies", [])])
+            return _live_registry_result([row.get("stockCode", "") for row in normalized.get("bist_companies", [])])
 
         return Operation(invoke, implementation="new httpx.Client + RSC workflow parser")
     if repo == "kap_tr_sdk":
@@ -476,7 +543,7 @@ def _live_registry(repo: str) -> Operation:
 
         def invoke() -> dict[str, Any]:
             rows = loop.run_until_complete(client.get_companies(fetch_remote=True))
-            return _result([row.code for row in rows])
+            return _live_registry_result([row.code for row in rows])
 
         def close() -> None:
             client.cache.close()

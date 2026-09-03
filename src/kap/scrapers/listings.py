@@ -19,7 +19,8 @@ from ..constants import (
 )
 from ..models.company import Company
 from ..models.market import Indice, Market, Sector, SubSector
-from .base import BaseScraper, KapDeadlineExceeded, KapValidationError
+from ..exceptions import KapDeadlineExceeded, KapValidationError
+from .base import BaseScraper
 
 logger = logging.getLogger("kap.scrapers.listings")
 
@@ -225,20 +226,28 @@ class ListingsScraper:
     def _scrape_page_json_objects(self, route_key: str) -> list[dict[str, Any]]:
         route = LISTING_ROUTES[route_key].format(lang=self.config.lang)
         resp = self.base.request_sync("GET", route)
-        html = resp.text
-        payload_text = _extract_next_payload_texts(html)
-        if not payload_text.strip():
-            payload_text = html.replace('\\"', '"')
-        return _extract_json_objects(payload_text)
+        def parse() -> list[dict[str, Any]]:
+            html = resp.text
+            payload_text = _extract_next_payload_texts(html)
+            if not payload_text.strip():
+                payload_text = html.replace('\\"', '"')
+            return _extract_json_objects(payload_text)
+
+        deadline = getattr(self.base, "operation_deadline", lambda: time.monotonic() + self.config.request_deadline_s)()
+        return BaseScraper.run_with_deadline_sync(self.base, parse, deadline_at=deadline)
 
     async def _ascrape_page_json_objects(self, route_key: str) -> list[dict[str, Any]]:
         route = LISTING_ROUTES[route_key].format(lang=self.config.lang)
         resp = await self.base.request_async("GET", route)
-        html = resp.text
-        payload_text = _extract_next_payload_texts(html)
-        if not payload_text.strip():
-            payload_text = html.replace('\\"', '"')
-        return _extract_json_objects(payload_text)
+        def parse() -> list[dict[str, Any]]:
+            html = resp.text
+            payload_text = _extract_next_payload_texts(html)
+            if not payload_text.strip():
+                payload_text = html.replace('\\"', '"')
+            return _extract_json_objects(payload_text)
+
+        deadline = getattr(self.base, "operation_deadline", lambda: time.monotonic() + self.config.request_deadline_s)()
+        return await BaseScraper.run_with_deadline_async(self.base, parse, deadline_at=deadline)
 
     # ── Companies ────────────────────────────────────────────────────────────
 
@@ -357,7 +366,7 @@ class ListingsScraper:
         """Get all BIST listed companies.
 
         Args:
-            online: If False (default), returns the fast bundled offline snapshot (759+ companies).
+            online: If False (default), returns the fast bundled offline snapshot (800+ tickers).
                     If True, scrapes the live BIST company registry from KAP.
         """
         if not online:
@@ -571,6 +580,15 @@ class ListingsScraper:
         if not member_oid:
             return None
         return _member_oid_index().get(str(member_oid).strip())
+
+    def lookup_ticker_by_title(self, company_title: str | None) -> str | None:
+        """Resolve an exact KAP company title to one or more listed ticker codes."""
+        if not company_title:
+            return None
+        _, _, by_name = _bundled_index()
+        matches = by_name.get(str(company_title).strip().casefold(), ())
+        tickers = sorted({company.ticker for company in matches})
+        return ", ".join(tickers) if tickers else None
 
     def refresh_registry(self, output_path: str | None = None) -> list[Company]:
         """Fetch, validate, diff, and atomically refresh a local JSON snapshot."""

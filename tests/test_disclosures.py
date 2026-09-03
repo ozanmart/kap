@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from kap.scrapers.disclosures import (
     _extract_rsc_attachment_objects,
+    _historical_date_windows,
+    _historical_payload,
     _matches_ticker,
+    _normalize_raw_disclosure,
     parse_disclosure_detail_html,
 )
 from kap.models.disclosure import Disclosure
+from kap.scrapers.disclosures import DisclosuresScraper
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "disclosure_detail.html"
@@ -44,6 +51,35 @@ def test_disclosure_detail_live_fixture_reads_rsc_attachment_metadata() -> None:
     }]
 
 
+def test_disclosure_detail_uses_primary_ticker_from_multi_code_company_link(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "kap.scrapers.disclosures._extract_rsc_detail_metadata",
+        lambda html: {
+            "title": "Özel Durum Açıklaması",
+            "publish_date": "02.09.2026 18:12:19",
+            "disclosure_type": "ÖDA",
+        },
+    )
+    html = """
+    <a href="/tr/sirket-bilgileri/ozet/2422">TÜRKİYE GARANTİ BANKASI A.Ş.</a>
+    <a href="/tr/sirket-bilgileri/ozet/2422">GARAN, TGB</a>
+    <div class="notification-body-scale-42">Açıklama gövdesi</div>
+    """
+
+    detail = parse_disclosure_detail_html(
+        html,
+        disclosure_index=42,
+        url="https://www.kap.org.tr/tr/Bildirim/42",
+        base_url="https://www.kap.org.tr",
+        lang="tr",
+    )
+
+    assert detail.stock_code == "GARAN"
+    assert detail.company_title == "TÜRKİYE GARANTİ BANKASI A.Ş."
+    assert detail.disclosure_type == "ÖDA"
+    assert detail.disclosure_class == "ODA"
+
+
 def test_ticker_filter_uses_exact_tokens() -> None:
     disclosure = Disclosure(
         disclosure_index=1,
@@ -54,3 +90,65 @@ def test_ticker_filter_uses_exact_tokens() -> None:
     assert _matches_ticker(disclosure, "AEFES")
     assert not _matches_ticker(disclosure, "H")
     assert not _matches_ticker(disclosure, "THY")
+
+
+def test_async_disclosure_type_and_subject_endpoints_have_sync_parity() -> None:
+    class AsyncJsonBase:
+        async def request_async(self, method, path, **kwargs):
+            if "/subjects/" in path:
+                payload = [{"disclosureClass": "FR", "subject": "Finansal Rapor", "subjectOid": "oid"}]
+            else:
+                payload = [{"disclosureBasic": {"disclosureIndex": 42, "title": "Faaliyet Raporu"}}]
+            return SimpleNamespace(json=lambda: payload)
+
+        def operation_deadline(self):
+            return None
+
+        async def run_with_deadline_async(self, func, *, deadline_at):
+            return func()
+
+    async def run() -> None:
+        scraper = DisclosuresScraper(base_scraper=AsyncJsonBase())
+        rows = await scraper.aget_company_disclosures_by_type("member", "FAR")
+        subjects = await scraper.aget_disclosure_subjects("FR")
+        assert rows == [{"disclosureIndex": 42, "title": "Faaliyet Raporu"}]
+        assert subjects[0].subject == "Finansal Rapor"
+
+    asyncio.run(run())
+
+
+def test_historical_query_uses_current_form_payload_and_bounded_windows() -> None:
+    windows = _historical_date_windows(
+        datetime.date(2024, 1, 1),
+        datetime.date(2025, 12, 31),
+    )
+    assert len(windows) == 2
+    assert windows[0] == (datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+    assert windows[1][0] == datetime.date(2025, 1, 1)
+
+    payload = _historical_payload("member", windows[0][0], windows[0][1], "FR", "subject")
+    assert payload["memberType"] == "IGS"
+    assert payload["marketOid"] == ""
+    assert payload["subjectList"] == ["subject"]
+
+
+def test_historical_flat_payload_is_normalized_using_current_kap_fields() -> None:
+    row = _normalize_raw_disclosure({
+        "disclosureIndex": 1657216,
+        "publishDate": "02.09.2026 11:23:45",
+        "stockCodes": "THYAO, THYAO",
+        "kapTitle": "TÜRK HAVA YOLLARI A.O.",
+        "subject": "Finansal Rapor",
+        "disclosureClass": "FR",
+        "relatedStocks": "PGSUS",
+        "year": 2025,
+        "ruleType": 4,
+    })
+
+    assert row.disclosure_index == 1657216
+    assert row.stock_code == "THYAO"
+    assert row.related_stocks == "PGSUS"
+    assert row.company_title == "TÜRK HAVA YOLLARI A.O."
+    assert row.title == "Finansal Rapor"
+    assert row.disclosure_type == "FR"
+    assert row.disclosure_class == "FR"

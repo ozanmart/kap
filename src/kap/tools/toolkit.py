@@ -217,6 +217,8 @@ class KapToolkit:
             stock_code=detail.stock_code,
             company_title=detail.company_title,
             publish_date=detail.publish_date,
+            disclosure_type=detail.disclosure_type,
+            disclosure_class=detail.disclosure_class,
             attachment_urls=detail.attachment_urls,
             attachment_metadata=detail.attachment_metadata,
             truncated=truncated,

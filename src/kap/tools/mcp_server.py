@@ -7,6 +7,7 @@ import logging
 import sys
 from typing import Any
 
+from .. import __version__
 from .toolkit import KapToolkit
 
 logger = logging.getLogger("kap.mcp")
@@ -63,7 +64,7 @@ async def run_mcp_stdio_server() -> None:
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "kap-mcp-server", "version": "0.1.0"},
+                    "serverInfo": {"name": "kap-mcp-server", "version": __version__},
                 },
             })
         elif method == "tools/list":

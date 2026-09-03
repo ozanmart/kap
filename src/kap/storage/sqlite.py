@@ -20,6 +20,7 @@ class KapDatabase:
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._closed = False
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -90,7 +91,10 @@ class KapDatabase:
             """)
 
     def close(self) -> None:
-        self.conn.close()
+        """Close the database handle; repeated cleanup calls are harmless."""
+        if not self._closed:
+            self.conn.close()
+            self._closed = True
 
     # ── Upserts ──────────────────────────────────────────────────────────────
 
