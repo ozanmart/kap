@@ -61,11 +61,7 @@ def search(query: str, online: bool):
 def info(ticker: str):
     """Show detailed company profile, shareholders, float, and subsidiaries."""
     with KapClient() as client:
-        try:
-            info = client.get_company_general_info(ticker)
-        except Exception as e:
-            click.echo(click.style(f"Error fetching info for {ticker}: {e}", fg="red"))
-            return
+        info = client.get_company_general_info(ticker)
 
         click.echo(click.style(f"\n=== {info.company_title or ticker} ({ticker.upper()}) ===", bold=True, fg="cyan"))
         click.echo(f"Activity Field : {info.activity_field or '-'}")
@@ -187,7 +183,8 @@ def calendar(days: int, ticker: str | None):
             stock = click.style(f"[{r.stock_code or 'MEMBER'}]", bold=True, fg="green")
             period = r.period or f"{r.year or ''}"
             dates = f"{r.start_date or ''} -> {r.end_date or ''}"
-            click.echo(f"  • {stock:<12} {r.company_title or '-'} | Period: {period:<15} Dates: {dates}")
+            subject = r.subject or "-"
+            click.echo(f"  • {stock:<12} {r.company_title or '-'} | Subject: {subject:<32} Period: {period:<15} Dates: {dates}")
 
 
 @main.command()

@@ -17,7 +17,6 @@ ENDPOINT_EXPECTED_DISCLOSURES = "/{lang}/api/expected-disclosure-inquiry/company
 ENDPOINT_DISCLOSURE_PAGE = "/{lang}/Bildirim/{disclosure_index}"
 ENDPOINT_DISCLOSURE_SUBJECTS = "/{lang}/api/disclosure/subjects/{disclosure_class}/IGS"
 ENDPOINT_HISTORICAL_DISCLOSURES = "/{lang}/api/disclosure/members/byCriteria"
-ENDPOINT_FINANCIAL_DOWNLOAD_XLS = "/{lang}/api/home-financial/download-file/{member_oid}/{year}/T"
 
 # Listing Pages
 LISTING_ROUTES = {

@@ -684,22 +684,6 @@ class AsyncKapClient:
             + "; ".join(failures)
         )
 
-    async def download_financial_report_xls(self, ticker_or_oid: str, year: int | str = 2024) -> dict[str, Any]:
-        """Async download zipped XLS financial report package."""
-        self._begin_operation("financial_xls")
-        year = positive_int(year, "year", maximum=2100)
-        oid = await self._resolve_member_oid(ticker_or_oid)
-        key = self._cache_key("financial-xls", oid=oid, year=year, lang=self.config.lang)
-
-        async def fetch() -> dict[str, Any]:
-            return await self.financials.adownload_financial_report_xls(oid, year=year)
-
-        result = await self._cached_async(
-            key, fetch, expire=self.config.cache_expiry_financials
-        )
-        self._capture_metrics()
-        return result
-
     # ── Events ───────────────────────────────────────────────────────────────
 
     async def extract_events(

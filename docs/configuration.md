@@ -55,16 +55,10 @@ Per-resource TTL fields include `cache_expiry_companies`, `cache_expiry_indices`
 `cache_expiry_latest`, `cache_expiry_today`, `cache_expiry_calendar`,
 `cache_expiry_company_general` and `cache_expiry_disclosure_detail`.
 
-## Persistence and optional XLS
+## Persistence
 
 The embedded SQLite database is available through `client.db` for local query
-and history use. It is closed with the client and `close()` is idempotent. The
-experimental XLS route is opt-in:
-
-```python
-with KapClient(KapConfig(enable_xls=True)) as client:
-    payload = client.download_financial_report_xls("THYAO", year=2024)
-```
+and history use. It is closed with the client and `close()` is idempotent.
 
 ## Registry safety
 

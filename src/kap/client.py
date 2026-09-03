@@ -225,6 +225,8 @@ class KapClient:
             expire=self.config.cache_expiry_company_general,
             force_refresh=force_refresh,
         )
+        if not info.company_title:
+            raise KapNotFoundError(f"No company profile found for '{ticker_or_oid}'")
         if not info.ticker:
             requested = ticker_or_oid.strip().upper()
             ticker = requested if re.fullmatch(r"[A-Z0-9]{2,10}", requested) else self.listings.lookup_ticker(oid)
@@ -554,18 +556,6 @@ class KapClient:
             + "; ".join(failures)
         )
 
-    def download_financial_report_xls(self, ticker_or_oid: str, year: int | str = 2024) -> dict[str, Any]:
-        """Download zipped XLS financial report package from KAP and parse tables."""
-        self._begin_operation("financial_xls")
-        year = positive_int(year, "year", maximum=2100)
-        oid = self._resolve_member_oid(ticker_or_oid)
-        key = self._cache_key("financial-xls", oid=oid, year=year, lang=self.config.lang)
-        return self._cached_call(
-            key,
-            lambda: self.financials.download_financial_report_xls(oid, year=year),
-            expire=self.config.cache_expiry_financials,
-        )
-
     # ── Events & AI Signals ──────────────────────────────────────────────────
 
     def extract_events(
@@ -608,7 +598,7 @@ class KapClient:
         resolved_stock = explicit_stock or (disclosure.stock_code if disclosure else (detail.stock_code if detail else None)) or "UNKNOWN"
         title = disclosure.title if disclosure else (detail.title if detail else None)
         pub_date = disclosure.publish_date if disclosure else (detail.publish_date if detail else None)
-        disc_type = disclosure.disclosure_type if disclosure else None
+        disc_type = (disclosure.disclosure_type if disclosure else None) or (detail.disclosure_type if detail else None)
 
         # A caller may provide body text while omitting the ticker. Fetch the detail
         # page in that case for identity/title metadata without replacing the text.
@@ -629,6 +619,7 @@ class KapClient:
             disc_id = disc_id or detail.disclosure_id or ""
             title = title or detail.title
             pub_date = pub_date or detail.publish_date
+            disc_type = disc_type or detail.disclosure_type
             if resolved_stock == "UNKNOWN":
                 resolved_stock = detail.stock_code or detail.company_title or "UNKNOWN"
 
