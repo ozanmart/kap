@@ -21,6 +21,11 @@
 - Fixed `tests/test_profiles_lazy.py` running its short-lived-process subprocess
   without `PYTHONPATH`, so that test exercised whatever `kap` was installed in
   the environment rather than this checkout.
+- Fixed `search_companies`/`kap search` missing every company whose name
+  contains a Turkish lowercase `i`: `"Şişe".upper()` yields `ŞIŞE` (dotless I)
+  while the registry holds `ŞİŞE`, so the query and the index could never meet.
+  Both sides are now folded through one Turkish-aware table, which also makes
+  diacritic-free queries such as `sise cam` or `turk hava` work.
 
 - Fixed `get_financials`/`get_financial_statement` returning zero line items
   for holding, bank, insurance and leasing/factoring companies: the parser

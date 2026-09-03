@@ -26,6 +26,31 @@ logger = logging.getLogger("kap.scrapers.listings")
 
 _TICKER_RE = re.compile(r"^[A-Z0-9]{2,6}$")
 
+# ``str.upper``/``str.casefold`` are locale independent, so "Şişe".upper() is
+# "ŞIŞE" (dotless I) while the registry holds "ŞİŞE". Folding both the index and
+# the query through one table makes search case insensitive *and* lets a caller
+# type "sise cam" or "turk hava" without Turkish diacritics.
+_TR_FOLD = str.maketrans({
+    "İ": "i", "I": "i", "ı": "i", "Î": "i", "î": "i",
+    "Ş": "s", "ş": "s",
+    "Ğ": "g", "ğ": "g",
+    "Ü": "u", "ü": "u", "Û": "u", "û": "u",
+    "Ö": "o", "ö": "o",
+    "Ç": "c", "ç": "c",
+    "Â": "a", "â": "a",
+})
+_SEARCH_TOKEN_RE = re.compile(r"[^\W_]{2,}")
+
+
+def _fold_tr(value: str) -> str:
+    """Fold Turkish case and diacritics for search index and query alike."""
+    return str(value or "").translate(_TR_FOLD).casefold()
+
+
+def _search_tokens(folded: str) -> list[str]:
+    """Split an already folded string into indexable search tokens."""
+    return _SEARCH_TOKEN_RE.findall(folded)
+
 
 def _extract_next_payload_texts(html: str) -> str:
     """Extract raw Next.js server push JSON strings from HTML source."""
@@ -199,16 +224,16 @@ def _member_oid_index() -> dict[str, str]:
 
 @lru_cache(maxsize=1)
 def _search_indexes() -> tuple[dict[str, tuple[Company, ...]], dict[str, tuple[Company, ...]]]:
-    """Build prefix and token indexes once; avoid scanning the registry per query."""
+    """Build folded prefix and token indexes once; avoid scanning per query."""
     companies, _, _ = _bundled_index()
     prefixes: dict[str, list[Company]] = {}
     tokens: dict[str, list[Company]] = {}
     for company in companies:
-        ticker = company.ticker.upper()
+        ticker = _fold_tr(company.ticker)
         for end in range(1, len(ticker) + 1):
             prefixes.setdefault(ticker[:end], []).append(company)
-        for token in re.findall(r"[A-Z0-9ÇĞİÖŞÜ]{2,}", company.name.upper()):
-            tokens.setdefault(token.casefold(), []).append(company)
+        for token in _search_tokens(_fold_tr(company.name)):
+            tokens.setdefault(token, []).append(company)
     return (
         {key: tuple(value) for key, value in prefixes.items()},
         {key: tuple(value) for key, value in tokens.items()},
@@ -541,9 +566,10 @@ class ListingsScraper:
         if exact_name:
             return list(exact_name)
         prefix_index, token_index = _search_indexes()
-        starts = list(prefix_index.get(q, ()))
+        folded = _fold_tr(normalized)
+        starts = list(prefix_index.get(folded, ()))
         starts_tickers = {c.ticker for c in starts}
-        query_tokens = [token.casefold() for token in re.findall(r"[A-Z0-9ÇĞİÖŞÜ]{2,}", q)]
+        query_tokens = _search_tokens(folded)
         if query_tokens:
             # Company is an unhashable Pydantic model, so intersect/membership
             # checks must key on the ticker rather than the model instance.
@@ -553,7 +579,7 @@ class ListingsScraper:
         else:
             # Arbitrary substring search is inherently O(n); keep it as a
             # compatibility fallback only for fragments that are not tokens.
-            name_match = [c for c in companies if q.casefold() in c.name.casefold() and c.ticker not in starts_tickers]
+            name_match = [c for c in companies if folded in _fold_tr(c.name) and c.ticker not in starts_tickers]
         return starts + name_match
 
     def lookup_member_oid(self, query: str) -> str | None:
